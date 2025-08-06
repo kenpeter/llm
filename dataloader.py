@@ -17,7 +17,7 @@ with open("the-verdict.txt", "r", encoding="utf-8") as f:
     raw_text = f.read()
 
 # trip spaces, this will create extra spaces.
-preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', raw_text)
+preprocessed = re.split(r'([,.:;?_!"()]|--|\s)', raw_text)
 preprocessed = [item.strip() for item in preprocessed if item.strip()]
 
 
@@ -37,7 +37,7 @@ class SimpleTokenizerV1:
 
     def encode(self, text):
         # income text will split
-        preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', text)
+        preprocessed = re.split(r'([,.:;?_!"()]|--|\s)', text)
 
         # income text no space
         preprocessed = [item.strip() for item in preprocessed if item.strip()]
@@ -51,52 +51,16 @@ class SimpleTokenizerV1:
         text = " ".join([self.int_to_str[i] for i in ids])
         # Replace spaces before the specified punctuations
 
-        # test
-        print(".... before ....")
-        print(text)
-
         # when we form the vocab, using split, it has extra space injected. this remove those spaces
-        text = re.sub(r'\s+([,.?!"()\'])', r"\1", text)
-
-        # test
-        print(".... after ....")
-        print(text)
+        text = re.sub(r'\s+([,.?!"()])', r"\1", text)
 
         return text
 
 
 tokenizer = SimpleTokenizerV1(all_words)
 
-text = """"It's the last he painted, you know," 
-           Mrs. Gisburn said with pardonable pride."""
+text = "It's the last he painted, you know, Mrs. Gisburn said with pardonable pride."
 # [1, 56, 2, 850, 988, 602, 533, 746, 5, 1126, 596, 5, 1, 67, 7, 38, 851, 1108, 754, 793, 7]
 ids = tokenizer.encode(text)
-
-
-# to see
-text = tokenizer.decode(
-    [
-        1,
-        56,
-        2,
-        850,
-        988,
-        602,
-        533,
-        746,
-        5,
-        1126,
-        596,
-        5,
-        1,
-        67,
-        7,
-        38,
-        851,
-        1108,
-        754,
-        793,
-        7,
-    ]
-)
+text = tokenizer.decode(ids)
 print(text)
