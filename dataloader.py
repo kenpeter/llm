@@ -22,8 +22,8 @@ preprocessed = [item.strip() for item in preprocessed if item.strip()]
 
 
 # basically the dict form first, then we can use tokenizer
-all_words = sorted(set(preprocessed))
-vocab_size = len(all_words)
+all_tokens = sorted(list(set(preprocessed)))
+all_tokens.extend(["<|endoftext|>", "<|unk|>"])
 
 
 # tokenizer
@@ -41,6 +41,9 @@ class SimpleTokenizerV1:
 
         # income text no space
         preprocessed = [item.strip() for item in preprocessed if item.strip()]
+        preprocessed = [
+            item if item in self.str_to_int else "<|unk|>" for item in preprocessed
+        ]
         # the s both in str_to_int and s in preprocess
         ids = [self.str_to_int[s] for s in preprocessed]
         # return id in array
@@ -57,10 +60,12 @@ class SimpleTokenizerV1:
         return text
 
 
-tokenizer = SimpleTokenizerV1(all_words)
+tokenizer = SimpleTokenizerV1(all_tokens)
 
-text = "It's the last he painted, you know, Mrs. Gisburn said with pardonable pride."
-# [1, 56, 2, 850, 988, 602, 533, 746, 5, 1126, 596, 5, 1, 67, 7, 38, 851, 1108, 754, 793, 7]
+text1 = "Hello, do you like tea?"
+text2 = "In the sunlit terraces of the palace."
+text = " <|endoftext|> ".join((text1, text2))
+
 ids = tokenizer.encode(text)
 text = tokenizer.decode(ids)
 print(text)
