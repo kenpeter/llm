@@ -61,11 +61,11 @@ def create_dataloader_v1(
     max_length=256,
     # stride 128
     stride=128,
-    # random
+    # make model learn pattern, not order
     shuffle=True,
-    # drop last true
+    # if the last batch size is smaller, we don't want to train, because unstable
     drop_last=True,
-    # zero worker
+    # zero worker, parallel worker
     num_workers=0,
 ):
 
@@ -75,11 +75,15 @@ def create_dataloader_v1(
     # slide win, so we have input arr, and target arr
     dataset = GPTDatasetV1(txt, tokenizer, max_length, stride)
 
-    # # data loader use the internal methods from GPTDatasetV1
+    # data loader use the internal methods from GPTDatasetV1
     dataloader = DataLoader(
+        # dataset is input_ids and target_ids
         dataset,
+        # batch size 
         batch_size=batch_size,
+        # shuffle
         shuffle=shuffle,
+        # drop last
         drop_last=drop_last,
         num_workers=num_workers,
     )
@@ -89,9 +93,7 @@ def create_dataloader_v1(
 
 
 # max len control how many token in single arr
-dataloader = create_dataloader_v1(
-    raw_text, batch_size=1, max_length=4, stride=1, shuffle=False
-)
+dataloader = create_dataloader_v1(raw_text, batch_size=8, max_length=4, stride=4, shuffle=False)
 
 # create iterator from data loader
 data_iter = iter(dataloader)
