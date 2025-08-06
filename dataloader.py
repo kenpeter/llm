@@ -93,6 +93,8 @@ dataloader = create_dataloader_v1(
     raw_text, batch_size=1, max_length=4, stride=1, shuffle=False
 )
 
+# create iterator from data loader
 data_iter = iter(dataloader)
+# then next get first batch
 first_batch = next(data_iter)
 print(first_batch)
