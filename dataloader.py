@@ -16,7 +16,7 @@ if not os.path.exists("the-verdict.txt"):
 with open("the-verdict.txt", "r", encoding="utf-8") as f:
     raw_text = f.read()
 
-# trip spaces
+# trip spaces, this will create extra spaces.
 preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', raw_text)
 preprocessed = [item.strip() for item in preprocessed if item.strip()]
 
@@ -28,28 +28,40 @@ vocab_size = len(all_words)
 
 # tokenizer
 class SimpleTokenizerV1:
+    # vocab is split, set, sorted, big arr
     def __init__(self, vocab):
-        # form dict
+        # vocab form dict (key, val)
         self.str_to_int = {token: integer for integer, token in enumerate(vocab)}
-        # form dict
+        # vocab form dict (val, key)
         self.int_to_str = {integer: token for integer, token in enumerate(vocab)}
 
-    # encode text into token id
     def encode(self, text):
-        # we decompose input text
+        # income text will split
         preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', text)
 
-        # no white space for input text
+        # income text no space
         preprocessed = [item.strip() for item in preprocessed if item.strip()]
-        # now form the id
+        # the s both in str_to_int and s in preprocess
         ids = [self.str_to_int[s] for s in preprocessed]
+        # return id in array
         return ids
 
     # decode token id back to text
     def decode(self, ids):
         text = " ".join([self.int_to_str[i] for i in ids])
         # Replace spaces before the specified punctuations
+
+        # test
+        print(".... before ....")
+        print(text)
+
+        # when we form the vocab, using split, it has extra space injected. this remove those spaces
         text = re.sub(r'\s+([,.?!"()\'])', r"\1", text)
+
+        # test
+        print(".... after ....")
+        print(text)
+
         return text
 
 
@@ -59,4 +71,32 @@ text = """"It's the last he painted, you know,"
            Mrs. Gisburn said with pardonable pride."""
 # [1, 56, 2, 850, 988, 602, 533, 746, 5, 1126, 596, 5, 1, 67, 7, 38, 851, 1108, 754, 793, 7]
 ids = tokenizer.encode(text)
-print(ids)
+
+
+# to see
+text = tokenizer.decode(
+    [
+        1,
+        56,
+        2,
+        850,
+        988,
+        602,
+        533,
+        746,
+        5,
+        1126,
+        596,
+        5,
+        1,
+        67,
+        7,
+        38,
+        851,
+        1108,
+        754,
+        793,
+        7,
+    ]
+)
+print(text)
