@@ -28,6 +28,6 @@ embedding = torch.nn.Embedding(num_idx, out_dim)
 # tensor is training data, feed to embed, will get vector
 # tensor([[ 1.3010,  1.2753, -0.2010, -0.1606, -0.4015]], grad_fn=<EmbeddingBackward0>)
 # 1 row and 5 col
-out = embedding(torch.tensor([1]))
+out = embedding(torch.tensor([0, 1, 2, 3]))
 
 print(out)
