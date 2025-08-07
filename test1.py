@@ -22,7 +22,7 @@ out_dim = 5 # 5 col
 # small random values
 torch.manual_seed(123)
 
-# row and col
+# row and col. why out it is 4x5 matrix
 embedding = torch.nn.Embedding(num_idx, out_dim)
 
 # tensor is training data, feed to embed, will get vector
@@ -30,4 +30,30 @@ embedding = torch.nn.Embedding(num_idx, out_dim)
 # 1 row and 5 col
 out = embedding(torch.tensor([0, 1, 2, 3]))
 
-print(out)
+# print(out)
+
+
+# idx = torch.tensor([2, 3, 1])
+# so we have onehot [[0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]] 
+onehot = torch.nn.functional.one_hot(idx)
+
+# seed
+torch.manual_seed(123)
+# similar to embed with row and col
+# Linear auto transpose
+linear = torch.nn.Linear(num_idx, out_dim, bias=False)
+
+
+# basically put embedding form to linear form. 4x5 -> 5x4
+linear.weight = torch.nn.Parameter(embedding.weight.T)
+
+print(linear.weight)
+
+# onehot becomes float
+# [[0., 0., 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]] -> 2, 1, 3
+myfloat = onehot.float()
+
+print(linear(onehot.float()))
+
+
+
