@@ -9,51 +9,48 @@ idx = torch.tensor([2, 3, 1])
 # by obtaining the largest token ID + 1.
 # If the highest token ID is 3, then we want 4 rows, for the possible
 # token IDs 0, 1, 2, 3
-num_idx = max(idx)+1 # 4 row
+num_idx = max(idx) + 1  # 4 row
 
 # The desired embedding dimension is a hyperparameter
-out_dim = 5 # 5 col
+out_dim = 5  # 5 col
 
 
-
-
-# We use the random seed for reproducibility since
-# weights in the embedding layer are initialized with
-# small random values
+# same
 torch.manual_seed(123)
 
-# row and col. why out it is 4x5 matrix
+# 4x5 matrix
 embedding = torch.nn.Embedding(num_idx, out_dim)
 
-# tensor is training data, feed to embed, will get vector
-# tensor([[ 1.3010,  1.2753, -0.2010, -0.1606, -0.4015]], grad_fn=<EmbeddingBackward0>)
-# 1 row and 5 col
-out = embedding(torch.tensor([0, 1, 2, 3]))
+# select 2, 3, 1 index from 4x5 -> 3x5
+out = embedding(torch.tensor([2, 3, 1]))
 
-# print(out)
+print("== embedding ==")
+print(out)
 
 
-# idx = torch.tensor([2, 3, 1])
-# so we have onehot [[0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]] 
+# [2, 3, 1] -> [[0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]] 3x4   --> 4x5 (looking for)
+# because onehot is int, matrix is float
 onehot = torch.nn.functional.one_hot(idx)
 
-# seed
+# same
 torch.manual_seed(123)
-# similar to embed with row and col
-# Linear auto transpose
+# linear, num_inx is col, out_dim is row --> swap --> 5x4
 linear = torch.nn.Linear(num_idx, out_dim, bias=False)
 
+# print out dim
+print(linear.weight.shape)
 
-# basically put embedding form to linear form. 4x5 -> 5x4
+
+# 5x4 -> 4x5
 linear.weight = torch.nn.Parameter(embedding.weight.T)
 
-print(linear.weight)
 
-# onehot becomes float
-# [[0., 0., 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]] -> 2, 1, 3
+# each ele become float
 myfloat = onehot.float()
 
-print(linear(onehot.float()))
 
+print("== onehot ==")
+print(linear(myfloat))
 
-
+# basically embedding is direct ind
+# linear is for output = input * W.T + bias cal
