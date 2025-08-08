@@ -14,34 +14,22 @@ inputs = torch.tensor(
 
 query = inputs[1]  # 2nd input token is the query
 
-# create empty attention score
-# size 6
 attn_scores_2 = torch.empty(inputs.shape[0])
 
-# loop 6 times, as 6 rows
+# 1. cal attention score for each row -> single element value for this row
 for i, x_i in enumerate(inputs):
-    # the 2nd token attention to all 6 -> each attention score
-    # attention score * x_i
-    attn_scores_2[i] = torch.dot(
-        x_i, query
-    )  # dot product (transpose not necessary here since they are 1-dim vectors)
+    # 1x3 dot 1x3 -> 1x3 dot 1x3.T -> 1x3 dot 3x1 -> 1 ele value for entire row
+    attn_scores_2[i] = torch.dot(x_i, query)
 
-print(attn_scores_2)
-
-# we normalized the all scores in single row, dim=0 row, dim=1, in 2D
+# 2. normalize each single value (represent each row)
 attn_weights_2 = torch.softmax(attn_scores_2, dim=0)
 
-print("Attention weights:", attn_weights_2)
-print("Sum:", attn_weights_2.sum())
-
-
-query = inputs[1]  # 2nd input token is the query
+query = inputs[1]
 
 context_vec_2 = torch.zeros(query.shape)
 for i, x_i in enumerate(inputs):
-    # if do a max, then only attention to this thing, other ele lost
-    # this blend together
+    # 1x3 dot 1x3 -> 1x3 dot 1x3.T -> 1x3 dot 3x1 -> single ele for entire row
     context_vec_2 += attn_weights_2[i] * x_i
 
-
-# print(context_vec_2)
+# context_vec_2 is 1x3
+print(context_vec_2)
