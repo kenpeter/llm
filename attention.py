@@ -122,3 +122,8 @@ attn_score_22 = query_2.dot(keys_2)
 
 attn_scores_2 = query_2 @ keys.T  # All attention scores for given query
 print(attn_scores_2)
+
+
+d_k = keys.shape[1]
+attn_weights_2 = torch.softmax(attn_scores_2 / d_k**0.5, dim=-1)
+print(attn_weights_2)
