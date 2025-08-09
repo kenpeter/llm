@@ -33,3 +33,12 @@ for i, x_i in enumerate(inputs):
 
 # context_vec_2 is 1x3
 print(context_vec_2)
+
+
+attn_scores = torch.empty(6, 6)
+
+for i, x_i in enumerate(inputs):
+    for j, x_j in enumerate(inputs):
+        attn_scores[i, j] = torch.dot(x_i, x_j)
+
+print(attn_scores)
