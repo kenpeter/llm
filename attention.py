@@ -119,7 +119,7 @@ keys_2 = keys[1]
 # [0.4306, 1.4551] dot [0.4433, 1.1419] = 0.4306 * 1.1419 + 1.4551 * 0.4433 = 1.13 (x)
 attn_score_22 = query_2.dot(keys_2)
 
-
+# 1x2 @ 6x2.T -> 1x6
 attn_scores_2 = query_2 @ keys.T  # All attention scores for given query
 print(attn_scores_2)
 
@@ -127,3 +127,7 @@ print(attn_scores_2)
 d_k = keys.shape[1]
 attn_weights_2 = torch.softmax(attn_scores_2 / d_k**0.5, dim=-1)
 print(attn_weights_2)
+
+
+context_vec_2 = attn_weights_2 @ values
+print(context_vec_2)
