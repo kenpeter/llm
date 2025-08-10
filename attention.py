@@ -85,7 +85,8 @@ print(query_2)
 print(key_2)
 print(value_2)
 
-
+# 1. it means other ele in inputs cannot be directly used, but attach with W_key and W_value
+# 2. after this we can use
 keys = inputs @ W_key
 values = inputs @ W_value
 
@@ -129,5 +130,10 @@ attn_weights_2 = torch.softmax(attn_scores_2 / d_k**0.5, dim=-1)
 print(attn_weights_2)
 
 
+# 1. W_q, W_k, W_val all from inputs @ W_?
+# 2. q_2 = W_q * x_2
+# 3. att_score_2 = q_2 @ all_keys.T
+# 4. att_score_2 -> normalize -> att_weight_2
+# 5. all_context = att_weight_2 @ value (because value is the last one not used.)
 context_vec_2 = attn_weights_2 @ values
 print(context_vec_2)
