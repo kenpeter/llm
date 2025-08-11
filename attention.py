@@ -265,18 +265,12 @@ class CausalAttention(nn.Module):
         queries = self.W_query(x)
         values = self.W_value(x)
 
-        # test
-        print("======")
-        print(keys)
-        print(queries)
-        print(values)
+        # (2, 6, 2) @ (2, 2, 6) --> first few can stay same, or 1 wildcard, last 2 dim can matrix cal
+        attn_scores = queries @ keys.transpose(1, 2)
 
-        # (2, 6, 2) @ (2, 2, 6)
-        attn_scores = queries @ keys.transpose(1, 2)  # Changed transpose
+        attn_scores.masked_fill_(self.mask.bool()[:num_tokens, :num_tokens], -torch.inf)
 
-        attn_scores.masked_fill_(  # New, _ ops are in-place
-            self.mask.bool()[:num_tokens, :num_tokens], -torch.inf
-        )  # `:num_tokens` to account for cases where the number of tokens in the batch is smaller than the supported context_size
+        # after mask, sum up to 1
         attn_weights = torch.softmax(attn_scores / keys.shape[-1] ** 0.5, dim=-1)
 
         # dropout
@@ -292,6 +286,7 @@ torch.manual_seed(123)
 
 # e.g. 6. how many data in arr
 context_length = batch.shape[1]
+# return context vec, with causal attention
 ca = CausalAttention(d_in, d_out, context_length, 0.0)
 
 context_vecs = ca(batch)
