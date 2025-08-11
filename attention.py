@@ -227,55 +227,74 @@ example = torch.ones(6, 6)  # create a matrix of ones
 # =================
 
 # dim = 0, dim = 1 start at y (x, y, z), dim = 2 start at z (x, y, z)
+# 2 inputs with 6 tokens each, and each token has embedding dimension 3
 batch = torch.stack((inputs, inputs), dim=0)
-
-print(batch)
-
-print(
-    batch.shape
-)  # 2 inputs with 6 tokens each, and each token has embedding dimension 3
 
 
 class CausalAttention(nn.Module):
-
+    # def init
+    # self, d_in, d_out, context_len, dropout, bias
     def __init__(self, d_in, d_out, context_length, dropout, qkv_bias=False):
+        # super init
         super().__init__()
+        # d_in, d_out
         self.d_out = d_out
+        # w query (linear func)
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        # w key (linear func)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
+        # w value (linear func)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        # dropout
         self.dropout = nn.Dropout(dropout)  # New
+        # causal mask
         self.register_buffer(
             "mask", torch.triu(torch.ones(context_length, context_length), diagonal=1)
         )  # New
 
     def forward(self, x):
+        # b, num token, d_in, all have x shape
         b, num_tokens, d_in = x.shape  # New batch dimension b
         # For inputs where `num_tokens` exceeds `context_length`, this will result in errors
         # in the mask creation further below.
         # In practice, this is not a problem since the LLM (chapters 4-7) ensures that inputs
         # do not exceed `context_length` before reaching this forward method.
+
+        # k, q, v
         keys = self.W_key(x)
         queries = self.W_query(x)
         values = self.W_value(x)
 
+        # test
+        print("======")
+        print(keys)
+        print(queries)
+        print(values)
+
+        # (2, 6, 2) @ (2, 2, 6)
         attn_scores = queries @ keys.transpose(1, 2)  # Changed transpose
+
         attn_scores.masked_fill_(  # New, _ ops are in-place
             self.mask.bool()[:num_tokens, :num_tokens], -torch.inf
         )  # `:num_tokens` to account for cases where the number of tokens in the batch is smaller than the supported context_size
         attn_weights = torch.softmax(attn_scores / keys.shape[-1] ** 0.5, dim=-1)
+
+        # dropout
         attn_weights = self.dropout(attn_weights)  # New
 
+        # context vec
         context_vec = attn_weights @ values
+        # context vec
         return context_vec
 
 
 torch.manual_seed(123)
 
+# e.g. 6. how many data in arr
 context_length = batch.shape[1]
 ca = CausalAttention(d_in, d_out, context_length, 0.0)
 
 context_vecs = ca(batch)
 
-print(context_vecs)
-print("context_vecs.shape:", context_vecs.shape)
+# print(context_vecs)
+# print("context_vecs.shape:", context_vecs.shape)
