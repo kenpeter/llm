@@ -284,12 +284,119 @@ class CausalAttention(nn.Module):
 
 torch.manual_seed(123)
 
-# e.g. 6. how many data in arr
-context_length = batch.shape[1]
-# return context vec, with causal attention
-ca = CausalAttention(d_in, d_out, context_length, 0.0)
+# # e.g. 6. how many data in arr
+# context_length = batch.shape[1]
+# # return context vec, with causal attention
+# ca = CausalAttention(d_in, d_out, context_length, 0.0)
 
-context_vecs = ca(batch)
+# context_vecs = ca(batch)
+
+
+# multi head attention
+class MultiHeadAttentionWrapper(nn.Module):
+    # def init
+    def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
+        super().__init__()
+        self.heads = nn.ModuleList(
+            [
+                CausalAttention(d_in, d_out, context_length, dropout, qkv_bias)
+                for _ in range(num_heads)
+            ]
+        )
+
+    def forward(self, x):
+        return torch.cat([head(x) for head in self.heads], dim=-1)
+
+
+torch.manual_seed(123)
+
+context_length = batch.shape[1]  # This is the number of tokens
+d_in, d_out = 3, 2
+mha = MultiHeadAttentionWrapper(d_in, d_out, context_length, 0.0, num_heads=2)
+
+context_vecs = mha(batch)
+
+
+# ===================
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
+        super().__init__()
+        assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
+
+        self.d_out = d_out
+        self.num_heads = num_heads
+        self.head_dim = (
+            d_out // num_heads
+        )  # Reduce the projection dim to match desired output dim
+
+        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.out_proj = nn.Linear(d_out, d_out)  # Linear layer to combine head outputs
+        self.dropout = nn.Dropout(dropout)
+        self.register_buffer(
+            "mask", torch.triu(torch.ones(context_length, context_length), diagonal=1)
+        )
+
+    def forward(self, x):
+        # x: (2, 6, 3)
+        b, num_tokens, d_in = x.shape
+
+        # linear transformation only change the last dim, as out = x @ W.transpose + bias
+        # nn.Linear(d_in, d_out) stores weight as (d_out, d_in) but uses as (d_in, d_out)
+        # (2, 6, 3) @ (3, 2) -> (2, 6, 2)
+        keys = self.W_key(x)  # Shape: (2, 6, 2)
+        queries = self.W_query(x)  # Shape: (2, 6, 2)
+        values = self.W_value(x)  # Shape: (2, 6, 2)
+
+        # single matrix, but view split, (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
+        # d_out=2, num_heads=2, head_dim=1: (2, 6, 2) -> (2, 6, 2, 1)
+        keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
+        values = values.view(b, num_tokens, self.num_heads, self.head_dim)
+        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
+
+        # Rearrange for parallel head processing: (b, num_tokens, num_heads, head_dim) -> (b, num_heads, num_tokens, head_dim)
+        # (2, 6, 2, 1) -> (2, 2, 6, 1)
+        keys = keys.transpose(1, 2)
+        queries = queries.transpose(1, 2)
+        values = values.transpose(1, 2)
+
+        # Attention scores: (b, num_heads, num_tokens, head_dim) @ (b, num_heads, head_dim, num_tokens)
+        # (2, 2, 6, 1) @ (2, 2, 1, 6) -> (2, 2, 6, 6)
+        attn_scores = queries @ keys.transpose(2, 3)
+        # Original mask truncated to the number of tokens and converted to boolean
+        mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
+
+        # Apply causal mask to prevent looking at future tokens
+        # mask_bool shape: (6, 6), attn_scores shape: (2, 2, 6, 6)
+        attn_scores.masked_fill_(mask_bool, -torch.inf)
+
+        # Softmax normalization: (2, 2, 6, 6) -> (2, 2, 6, 6)
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1] ** 0.5, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
+        # Apply attention to values: (2, 2, 6, 6) @ (2, 2, 6, 1) -> (2, 2, 6, 1)
+        # Then transpose back: (2, 2, 6, 1) -> (2, 6, 2, 1)
+        context_vec = (attn_weights @ values).transpose(1, 2)
+
+        # Combine heads: (2, 6, 2, 1) -> (2, 6, 2) where d_out = num_heads * head_dim = 2 * 1 = 2
+        context_vec = context_vec.contiguous().view(b, num_tokens, self.d_out)
+
+        # Final output projection: (2, 6, 2) @ (2, 2) -> (2, 6, 2)
+        context_vec = self.out_proj(context_vec)
+
+        return context_vec
+
+
+torch.manual_seed(123)
+
+batch_size, context_length, d_in = batch.shape
+d_out = 2
+mha = MultiHeadAttention(d_in, d_out, context_length, 0.0, num_heads=2)
+
+context_vecs = mha(batch)
 
 # print(context_vecs)
 # print("context_vecs.shape:", context_vecs.shape)
