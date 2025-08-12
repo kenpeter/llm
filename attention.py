@@ -352,7 +352,7 @@ class MultiHeadAttention(nn.Module):
         values = self.W_value(x)  # Shape: (2, 6, 2)
 
         # single matrix, but view split, (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
-        # d_out=2, num_heads=2, head_dim=1: (2, 6, 2) -> (2, 6, 2, 1)
+        # (2, 6, 2) 1 token has 2 features ----> (2, 6, 2, 1) 1 token has 2 head, 1 head has 1 feature
         keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
         values = values.view(b, num_tokens, self.num_heads, self.head_dim)
         queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
@@ -364,7 +364,7 @@ class MultiHeadAttention(nn.Module):
         values = values.transpose(1, 2)
 
         # Attention scores: (b, num_heads, num_tokens, head_dim) @ (b, num_heads, head_dim, num_tokens)
-        # (2, 2, 6, 1) @ (2, 2, 1, 6) -> (2, 2, 6, 6)
+        # (2, 2, 6, 1) @ (2, 2, 1, 6) -> (2, 2, 6, 6), last (6, 6) token
         attn_scores = queries @ keys.transpose(2, 3)
         # Original mask truncated to the number of tokens and converted to boolean
         mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
@@ -378,7 +378,8 @@ class MultiHeadAttention(nn.Module):
         attn_weights = self.dropout(attn_weights)
 
         # Apply attention to values: (2, 2, 6, 6) @ (2, 2, 6, 1) -> (2, 2, 6, 1)
-        # Then transpose back: (2, 2, 6, 1) -> (2, 6, 2, 1)
+        # (b, num_heads, num token, num token) @ (b, num_heads, num token, head_dim) -> (b, num head, num token, head dim)
+        # Then transpose back:  (2, 2, 6, 6) @ (2, 2, 6, 1)   ->   (2, 2, 6, 1) -> (2, 6, 2, 1)
         context_vec = (attn_weights @ values).transpose(1, 2)
 
         # Combine heads: (2, 6, 2, 1) -> (2, 6, 2) where d_out = num_heads * head_dim = 2 * 1 = 2
