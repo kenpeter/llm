@@ -204,3 +204,104 @@ mha_ch03 = Ch03_MHA(
 
 out = mha_ch03(embeddings)
 print(out.shape)
+
+
+
+# =========
+
+import torch.nn as nn
+
+
+class MultiHeadAttentionCombinedQKV(nn.Module):
+    def __init__(self, d_in, d_out, num_heads, context_length, dropout=0.0, qkv_bias=False):
+        super().__init__()
+
+        # Ensure d_out (768) is divisible by num_heads (12)
+        assert d_out % num_heads == 0, "d_out is indivisible by num_heads"
+
+        # Store parameters: 12 heads, 1024 context length
+        self.num_heads = num_heads
+        self.context_length = context_length
+        # Each head processes: 768 / 12 = 64 dimensions
+        self.head_dim = d_out // num_heads
+
+        # (768, 768*3) -> (768, 2304)
+        self.qkv = nn.Linear(d_in, 3 * d_out, bias=qkv_bias)
+        # Output projection: (768, 768)
+        self.proj = nn.Linear(d_out, d_out)
+        # Dropout layer
+        self.dropout = nn.Dropout(dropout)
+
+        # Causal mask: upper triangular matrix (1024, 1024)
+        self.register_buffer(
+            "mask", torch.triu(torch.ones(context_length, context_length), diagonal=1)
+        )
+
+    def forward(self, x):
+        # Input shape: x = (8, 1024, 768)
+        batch_size, num_tokens, embed_dim = x.shape
+
+        # Apply single QKV linear layer: (8, 1024, 768) → (8, 1024, 2304)
+        # 2304 = 3 * 768 (concatenated Q, K, V projections)
+        qkv = self.qkv(x)
+
+        # Reshape to separate Q, K, V: (8, 1024, 2304) → (8, 1024, 3, 12, 64)
+        # 2304 = 3 * 12 * 64 (3 projections × 12 heads × 64 dims per head)
+        qkv = qkv.view(batch_size, num_tokens, 3, self.num_heads, self.head_dim)
+
+        # Rearrange dimensions: (8, 1024, 3, 12, 64) → (3, 8, 12, 1024, 64)
+        # (b, token_n, projection, head_n, head_dim) → (projection, b, head_n, token_n, head_dim)
+        # Move the "3" (Q, K, V) to the front for easy separation
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+
+        # Split into Q, K, V: (3, 8, 12, 1024, 64) → 3 × (8, 12, 1024, 64)
+        # (projection, batch, head_n, token_n, head_dim) → 3 × (batch, head_n, token_n, head_dim)
+        # queries, keys, values each have shape (8, 12, 1024, 64)
+        # unbind at index 0, means split
+        queries, keys, values = qkv.unbind(0)
+
+        # Compute attention scores: (8, 12, 1024, 64) @ (8, 12, 64, 1024) → (8, 12, 1024, 1024)
+        # Each head computes token-to-token attention scores
+        attn_scores = queries @ keys.transpose(-2, -1)
+        # Apply causal mask: set future positions to -inf
+        attn_scores = attn_scores.masked_fill(
+            self.mask.bool()[:num_tokens, :num_tokens], -torch.inf
+        )
+
+        # Convert scores to probabilities: (8, 12, 1024, 1024)
+        # NOTE: keys.shape[-1]**-0.5 should be **0.5 (positive exponent for scaling)
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        # Apply dropout to attention weights
+        attn_weights = self.dropout(attn_weights)
+
+        # Apply attention to values: (8, 12, 1024, 1024) @ (8, 12, 1024, 64) → (8, 12, 1024, 64)
+        # Get weighted combination of value vectors
+        context_vec = attn_weights @ values
+
+        # Transpose back: (8, 12, 1024, 64) → (8, 1024, 12, 64)
+        # Move heads dimension back to prepare for concatenation
+        context_vec = context_vec.transpose(1, 2)
+
+        # Concatenate heads: (8, 1024, 12, 64) → (8, 1024, 768)
+        # Flatten the last two dimensions: 12 * 64 = 768
+        context_vec = context_vec.contiguous().view(batch_size, num_tokens, embed_dim)
+
+        # Final output projection: (8, 1024, 768) → (8, 1024, 768)
+        context_vec = self.proj(context_vec)
+
+        return context_vec
+
+
+# Create the combined QKV multi-head attention model
+mha_combined_qkv = MultiHeadAttentionCombinedQKV(
+    d_in=embed_dim,        # Input dimension: 768
+    d_out=embed_dim,       # Output dimension: 768  
+    context_length=context_len,  # Context length: 1024
+    dropout=0.0,           # No dropout
+    num_heads=12,          # 12 attention heads
+    qkv_bias=False         # No bias in QKV projection
+).to(device)
+
+# Run forward pass: (8, 1024, 768) → (8, 1024, 768)
+out = mha_combined_qkv(embeddings)
+print(out.shape)  # Should print: torch.Size([8, 1024, 768])
