@@ -334,7 +334,7 @@ class MultiHeadAttention(nn.Module):
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
-        self.out_proj = nn.Linear(d_out, d_out)  # Linear layer to combine head outputs
+        self.out_proj = nn.Linear(d_out, d_out)
         self.dropout = nn.Dropout(dropout)
         self.register_buffer(
             "mask", torch.triu(torch.ones(context_length, context_length), diagonal=1)
@@ -344,26 +344,30 @@ class MultiHeadAttention(nn.Module):
         # x: (2, 6, 3)
         b, num_tokens, d_in = x.shape
 
-        # linear transformation only change the last dim, as out = x @ W.transpose + bias
-        # nn.Linear(d_in, d_out) stores weight as (d_out, d_in) but uses as (d_in, d_out)
+        # linear: transformation only change the last dim, as out = x @ W.transpose + bias
+        # linear: stores weight as (d_out, d_in) but uses as (d_in, d_out)
+        # (b, token_n, d_out) @ (d_in, d_out)
         # (2, 6, 3) @ (3, 2) -> (2, 6, 2)
         keys = self.W_key(x)  # Shape: (2, 6, 2)
-        queries = self.W_query(x)  # Shape: (2, 6, 2)
-        values = self.W_value(x)  # Shape: (2, 6, 2)
+        queries = self.W_query(x)
+        values = self.W_value(x)
 
-        # single matrix, but view split, (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
-        # (2, 6, 2) 1 token has 2 features ----> (2, 6, 2, 1) 1 token has 2 head, 1 head has 1 feature
+        # (b, token_n, d_out) -> (b, token_n, head_n, head_dim); giant single matrix, vitually split
+        # head_n * head_dim = d_out; 2 * 1 = 2
+        # (2, 6, 2) -> (2, 6, 2, 1)
         keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
         values = values.view(b, num_tokens, self.num_heads, self.head_dim)
         queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
 
-        # Rearrange for parallel head processing: (b, num_tokens, num_heads, head_dim) -> (b, num_heads, num_tokens, head_dim)
+        # (b, token_n, head_n, head_dim) -> (b, head_n, token_n, head_dim)
+        # hierachy meaning change. orig: single token has 2 head. now: single head has 6 token
+        # computation: do head 1st
         # (2, 6, 2, 1) -> (2, 2, 6, 1)
         keys = keys.transpose(1, 2)
         queries = queries.transpose(1, 2)
         values = values.transpose(1, 2)
 
-        # Attention scores: (b, num_heads, num_tokens, head_dim) @ (b, num_heads, head_dim, num_tokens)
+        # (b, num_heads, num_tokens, head_dim) @ (b, num_heads, head_dim, num_tokens)
         # (2, 2, 6, 1) @ (2, 2, 1, 6) -> (2, 2, 6, 6), last (6, 6) token
         attn_scores = queries @ keys.transpose(2, 3)
         # Original mask truncated to the number of tokens and converted to boolean
@@ -382,10 +386,11 @@ class MultiHeadAttention(nn.Module):
         # Then transpose back:  (2, 2, 6, 6) @ (2, 2, 6, 1)   ->   (2, 2, 6, 1) -> (2, 6, 2, 1)
         context_vec = (attn_weights @ values).transpose(1, 2)
 
-        # Combine heads: (2, 6, 2, 1) -> (2, 6, 2) where d_out = num_heads * head_dim = 2 * 1 = 2
+        # (b, num_heads, num token, num token) @ (b, num_heads, num token, head_dim)
+        # back to original (2, 6, 2, 1) -> (2, 6, 2)
         context_vec = context_vec.contiguous().view(b, num_tokens, self.d_out)
 
-        # Final output projection: (2, 6, 2) @ (2, 2) -> (2, 6, 2)
+        # (2, 6, 2) @ (2, 2) -> (2, 6, 2), same shape, but went through out = x @ weight.T + bias
         context_vec = self.out_proj(context_vec)
 
         return context_vec
