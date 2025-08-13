@@ -367,27 +367,27 @@ class MultiHeadAttention(nn.Module):
         queries = queries.transpose(1, 2)
         values = values.transpose(1, 2)
 
-        # (b, num_heads, num_tokens, head_dim) @ (b, num_heads, head_dim, num_tokens)
-        # (2, 2, 6, 1) @ (2, 2, 1, 6) -> (2, 2, 6, 6), last (6, 6) token
+        # basically we use single matrix, virtually split, before attn score, attn weight, context
+
+        # (b, head_n, token_n, head_dim) @ (b, head_n, head_dim, token_n).Tr -> (b, head_n, token_n, token_n)
+        # (2, 2, 6, 1) @ (2, 2, 1, 6) -> (2, 2, 6, 6); last (6, 6) token
         attn_scores = queries @ keys.transpose(2, 3)
-        # Original mask truncated to the number of tokens and converted to boolean
+        # because last 2 dim are (6, 6) token, we can easily apply mask
         mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
 
-        # Apply causal mask to prevent looking at future tokens
-        # mask_bool shape: (6, 6), attn_scores shape: (2, 2, 6, 6)
+        # top right mask
         attn_scores.masked_fill_(mask_bool, -torch.inf)
 
-        # Softmax normalization: (2, 2, 6, 6) -> (2, 2, 6, 6)
+        # softmax/dropput, (2, 2, 6, 6) -> (2, 2, 6, 6)
         attn_weights = torch.softmax(attn_scores / keys.shape[-1] ** 0.5, dim=-1)
         attn_weights = self.dropout(attn_weights)
 
-        # Apply attention to values: (2, 2, 6, 6) @ (2, 2, 6, 1) -> (2, 2, 6, 1)
-        # (b, num_heads, num token, num token) @ (b, num_heads, num token, head_dim) -> (b, num head, num token, head dim)
-        # Then transpose back:  (2, 2, 6, 6) @ (2, 2, 6, 1)   ->   (2, 2, 6, 1) -> (2, 6, 2, 1)
+        # (b, head_n, token_n, token_n) @ (b, head_n, token_n, head_dim) -> (b, head_n, token_n, head_dim) -> tr -> (b, token_n, head_n, head_dim)
+        # (2, 2, 6, 6) @ (2, 2, 6, 1) -> (2, 2, 6, 1) -> Tr -> (2, 6, 2, 1), slowlly back to orig
         context_vec = (attn_weights @ values).transpose(1, 2)
 
-        # (b, num_heads, num token, num token) @ (b, num_heads, num token, head_dim)
-        # back to original (2, 6, 2, 1) -> (2, 6, 2)
+        # (b, token_n, head_n, head_dim) @ (b, token_n, d_out)
+        # original now, (2, 6, 2, 1) -> (2, 6, 2)
         context_vec = context_vec.contiguous().view(b, num_tokens, self.d_out)
 
         # (2, 6, 2) @ (2, 2) -> (2, 6, 2), same shape, but went through out = x @ weight.T + bias
