@@ -212,55 +212,63 @@ out = ffn(x)
 class ExampleDeepNeuralNetwork(nn.Module):
     def __init__(self, layer_sizes, use_shortcut):
         super().__init__()
+        # Flag to enable/disable skip connections (residual connections)
         self.use_shortcut = use_shortcut
+        # Create 5 layers with GELU activation
         self.layers = nn.ModuleList([
-            nn.Sequential(nn.Linear(layer_sizes[0], layer_sizes[1]), GELU()),
-            nn.Sequential(nn.Linear(layer_sizes[1], layer_sizes[2]), GELU()),
-            nn.Sequential(nn.Linear(layer_sizes[2], layer_sizes[3]), GELU()),
-            nn.Sequential(nn.Linear(layer_sizes[3], layer_sizes[4]), GELU()),
-            nn.Sequential(nn.Linear(layer_sizes[4], layer_sizes[5]), GELU())
+            nn.Sequential(nn.Linear(layer_sizes[0], layer_sizes[1]), GELU()),  # Layer 1: 3->3
+            nn.Sequential(nn.Linear(layer_sizes[1], layer_sizes[2]), GELU()),  # Layer 2: 3->3
+            nn.Sequential(nn.Linear(layer_sizes[2], layer_sizes[3]), GELU()),  # Layer 3: 3->3
+            nn.Sequential(nn.Linear(layer_sizes[3], layer_sizes[4]), GELU()),  # Layer 4: 3->3
+            nn.Sequential(nn.Linear(layer_sizes[4], layer_sizes[5]), GELU())   # Layer 5: 3->1
         ])
 
     def forward(self, x):
+        # Process each layer sequentially
         for layer in self.layers:
             # Compute the output of the current layer
             layer_output = layer(x)
-            # Check if shortcut can be applied
+            # Check if skip connection can be applied (same shape required)
             if self.use_shortcut and x.shape == layer_output.shape:
-                x = x + layer_output
+                x = x + layer_output  # Residual connection: input + output
             else:
-                x = layer_output
+                x = layer_output  # No skip connection: just use output
         return x
 
 
 def print_gradients(model, x):
-    # Forward pass
+    # Forward pass: get model prediction
     output = model(x)
+    # Target value we want the model to predict
     target = torch.tensor([[0.]])
 
-    # Calculate loss based on how close the target
-    # and output are
+    # Calculate loss: measure difference between prediction and target
     loss = nn.MSELoss()
     loss = loss(output, target)
     
-    # Backward pass to calculate the gradients
+    # Backward pass: compute gradients for all parameters
     loss.backward()
 
+    # Print gradient magnitudes for each weight matrix
     for name, param in model.named_parameters():
-        if 'weight' in name:
+        if 'weight' in name:  # Only examine weight parameters (skip biases)
             # Print the mean absolute gradient of the weights
             print(f"{name} has gradient mean of {param.grad.abs().mean().item()}")
 
 
-
+# Network architecture: input_size=3, hidden_layers=3, output_size=1
 layer_sizes = [3, 3, 3, 3, 3, 1]  
 
+# Sample input: batch_size=1, features=3
 sample_input = torch.tensor([[1., 0., -1.]])
 
+# Set random seed for reproducible results
 torch.manual_seed(123)
+# Create model without skip connections
 model_without_shortcut = ExampleDeepNeuralNetwork(
     layer_sizes, use_shortcut=False
 )
+# Analyze gradient flow in the network
 print_gradients(model_without_shortcut, sample_input)
 
 
