@@ -211,15 +211,21 @@ out = ffn(x)
 
 class ExampleDeepNeuralNetwork(nn.Module):
     def __init__(self, layer_sizes, use_shortcut):
+        # super init
         super().__init__()
-        # Flag to enable/disable skip connections (residual connections)
+        # enable / disable shortcut
         self.use_shortcut = use_shortcut
         # Create 5 layers with GELU activation
         self.layers = nn.ModuleList([
+            # [3, 3]
             nn.Sequential(nn.Linear(layer_sizes[0], layer_sizes[1]), GELU()),  # Layer 1: 3->3
+            # [3, 3]
             nn.Sequential(nn.Linear(layer_sizes[1], layer_sizes[2]), GELU()),  # Layer 2: 3->3
+            # [3, 3]
             nn.Sequential(nn.Linear(layer_sizes[2], layer_sizes[3]), GELU()),  # Layer 3: 3->3
+            # [3, 3]
             nn.Sequential(nn.Linear(layer_sizes[3], layer_sizes[4]), GELU()),  # Layer 4: 3->3
+            # [3, 1]
             nn.Sequential(nn.Linear(layer_sizes[4], layer_sizes[5]), GELU())   # Layer 5: 3->1
         ])
 
@@ -256,10 +262,11 @@ def print_gradients(model, x):
             print(f"{name} has gradient mean of {param.grad.abs().mean().item()}")
 
 
-# Network architecture: input_size=3, hidden_layers=3, output_size=1
+# Network architecture: input_size=3, hidden_layers=4, output_size=1
 layer_sizes = [3, 3, 3, 3, 3, 1]  
 
-# Sample input: batch_size=1, features=3
+
+# (b, feature) -> (1, 3)
 sample_input = torch.tensor([[1., 0., -1.]])
 
 # Set random seed for reproducible results
