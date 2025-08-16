@@ -264,7 +264,8 @@ def print_gradients(model, x):
     for name, param in model.named_parameters():
         if 'weight' in name:  # Only examine weight parameters (skip biases)
             # Print the mean absolute gradient of the weights
-            print(f"{name} has gradient mean of {param.grad.abs().mean().item()}")
+            # print(f"{name} has gradient mean of {param.grad.abs().mean().item()}")
+            pass
 
 
 # Network architecture: input_size=3, hidden_layers=4, output_size=1
@@ -298,18 +299,30 @@ print_gradients(model_without_shortcut, sample_input)
 from previous_chapters import MultiHeadAttention
 
 
+# transformer block
+# nn module
 class TransformerBlock(nn.Module):
+    # init and super init
     def __init__(self, cfg):
         super().__init__()
 
-        # different kind of attention
+        # multi head attention
         self.att = MultiHeadAttention(
+            # 768
             d_in=cfg["emb_dim"],
+            # 768
             d_out=cfg["emb_dim"],
+            # 1024
             context_length=cfg["context_length"],
+            # 12 head
             num_heads=cfg["n_heads"], 
+            # 0.1
             dropout=cfg["drop_rate"],
-            qkv_bias=cfg["qkv_bias"])
+            # bias false
+            qkv_bias=cfg["qkv_bias"]
+        )
+
+        # feed forward
         self.ff = FeedForward(cfg)
         self.norm1 = LayerNorm(cfg["emb_dim"])
         self.norm2 = LayerNorm(cfg["emb_dim"])
@@ -319,15 +332,29 @@ class TransformerBlock(nn.Module):
         # Shortcut connection for attention block
         shortcut = x
         x = self.norm1(x)
-        x = self.att(x)  # Shape [batch_size, num_tokens, emb_size]
+        # [64, 4, 768]
+        # [batch_size, num_tokens, emb_size]
+        x = self.att(x)
         x = self.drop_shortcut(x)
-        x = x + shortcut  # Add the original input back
+        # shortcut in attention
+        x = x + shortcut
 
         # Shortcut connection for feed forward block
         shortcut = x
         x = self.norm2(x)
         x = self.ff(x)
         x = self.drop_shortcut(x)
-        x = x + shortcut  # Add the original input back
+        # shortcut in feedforward
+        x = x + shortcut
 
         return x
+    
+
+torch.manual_seed(123)
+
+x = torch.rand(2, 4, 768)  # Shape: [batch_size, num_tokens, emb_dim]
+block = TransformerBlock(GPT_CONFIG_124M)
+output = block(x)
+
+print("Input shape:", x.shape)
+print("Output shape:", output.shape)
