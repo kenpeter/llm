@@ -442,21 +442,26 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
         with torch.no_grad():
             logits = model(idx_cond)
 
-        print(logits)
         
         # Focus only on the last time step
-        # (batch, n_tokens, vocab_size) becomes (batch, vocab_size)
+        # (batch, n_tokens, vocab_size) becomes (batch, vocab_size), because -1 no dim, -1: keep dim
         logits = logits[:, -1, :]  
 
-        # Apply softmax to get probabilities
-        probas = torch.softmax(logits, dim=-1)  # (batch, vocab_size)
+        # (batch, vocab_size), we still have 1 token, but no show. [ [0.9, 1.7, 0.4, ...] ]
+        probas = torch.softmax(logits, dim=-1)  
 
-        # Get the idx of the vocab entry with the highest probability value
+        # because it is one number, so we need to consider the dim
+        # okok, so it return the index
         idx_next = torch.argmax(probas, dim=-1, keepdim=True)  # (batch, 1)
 
-        # Append sampled index to the running sequence
+        print(' === ')
+        print("idx_next: ", idx_next)
+        print("idx: ", idx)
+
+        # stack all index
         idx = torch.cat((idx, idx_next), dim=1)  # (batch, n_tokens+1)
 
+        print("idx: ", idx)
     return idx
 
 
@@ -488,7 +493,6 @@ out = generate_text_simple(
 )
 
 
-
-
+# ok so the word to token id, so we will get word
 decoded_text = tokenizer.decode(out.squeeze(0).tolist())
 # print(decoded_text)
