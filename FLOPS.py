@@ -86,6 +86,8 @@ class TransformerBlock(nn.Module):
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"]
         )
+
+        # so the feed forward using GELU
         self.ff = FeedForward(cfg)
         self.norm1 = LayerNorm(cfg["emb_dim"])
         self.norm2 = LayerNorm(cfg["emb_dim"])
@@ -108,7 +110,7 @@ class TransformerBlock(nn.Module):
 
         return x
 
-
+# gpt model
 class GPTModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -138,13 +140,17 @@ class GPTModel(nn.Module):
 
 # Base configuration shared by all model sizes
 BASE_CONFIG = {
-    "vocab_size": 50257,     # Total number of tokens in vocabulary (GPT-2 tokenizer)
-    "context_length": 1024,  # Maximum sequence length the model can process
-    "drop_rate": 0.0,        # Dropout rate (0.0 = no dropout for inference)
-    "qkv_bias": True         # Whether to use bias in query-key-value projections
+    # voacab, 50257
+    "vocab_size": 50257,
+    # context len 1024
+    "context_length": 1024,
+    # drop rate 0
+    "drop_rate": 0.0,
+    # use qkv bias
+    "qkv_bias": True 
 }
 
-# Different GPT model configurations with varying sizes
+# embed size 1600, layer 48, n head 25
 model_configs = {
     "gpt-small (124M)": {"emb_dim": 768, "n_layers": 12, "n_heads": 12},   # Smallest model
     "gpt-medium (355M)": {"emb_dim": 1024, "n_layers": 24, "n_heads": 16}, # Medium model
@@ -152,16 +158,16 @@ model_configs = {
     "gpt-xl (1558M)": {"emb_dim": 1600, "n_layers": 48, "n_heads": 25},    # Extra large model
 }
 
-# Choose device: GPU if available, otherwise CPU
+# cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# Set batch size for input tensor (number of sequences to process simultaneously)
+# batch size 2
 batch_size = 2
-# Create random input tensor: (batch_size, sequence_length) with token IDs
+# input tensor; from 0 to 50257; (2, 1024)
 input_tensor = torch.randint(0, 50257, (batch_size, 1024)).to(device)
 
-# Loop through each model configuration to measure FLOPs
+# loop diff model config, to see FLOPS
 for size in model_configs:
-    # Update base config with current model size settings
+    # object got merged
     BASE_CONFIG.update(model_configs[size])
 
     # Create GPT model with current config and convert to bfloat16 for efficiency
@@ -172,6 +178,14 @@ for size in model_configs:
     # MACS = multiply-accumulate operations (one multiply + one add = 2 FLOPs)
     # MACS are typically counted as two FLOPS (one multiply and one accumulate)
     # Profile the model to count operations and parameters
+
+    # MACS = multiply + acc operation, so 2 flops
+    # MACS ~= 2.1e+11
+    # track every layers (embed, attn, feed forward, etc.)
+    # count matrix multi, add, etc.
+    # return total MACS
+
+    # params weight, bias
     macs, params = profile(model, inputs=(input_tensor,), verbose=False)
     # Convert MACs to FLOPs (1 MAC = 2 FLOPs)
     flops = 2*macs
