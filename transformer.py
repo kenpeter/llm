@@ -282,7 +282,7 @@ model_without_shortcut = ExampleDeepNeuralNetwork(
     layer_sizes, use_shortcut=False
 )
 # Analyze gradient flow in the network
-print_gradients(model_without_shortcut, sample_input)
+# print_gradients(model_without_shortcut, sample_input)
 
 
 
@@ -356,5 +356,139 @@ x = torch.rand(2, 4, 768)  # Shape: [batch_size, num_tokens, emb_dim]
 block = TransformerBlock(GPT_CONFIG_124M)
 output = block(x)
 
-print("Input shape:", x.shape)
-print("Output shape:", output.shape)
+
+
+
+# =======================
+
+
+class GPTModel(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
+        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
+        self.drop_emb = nn.Dropout(cfg["drop_rate"])
+        
+        self.trf_blocks = nn.Sequential(
+            *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
+        
+        self.final_norm = LayerNorm(cfg["emb_dim"])
+        self.out_head = nn.Linear(
+            cfg["emb_dim"], cfg["vocab_size"], bias=False
+        )
+
+    def forward(self, in_idx):
+        batch_size, seq_len = in_idx.shape
+        tok_embeds = self.tok_emb(in_idx)
+        pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
+        x = tok_embeds + pos_embeds  # Shape [batch_size, num_tokens, emb_size]
+        x = self.drop_emb(x)
+        x = self.trf_blocks(x)
+        x = self.final_norm(x)
+        logits = self.out_head(x)
+        return logits
+    
+
+torch.manual_seed(123)
+model = GPTModel(GPT_CONFIG_124M)
+
+out = model(batch)
+# print("Input batch:\n", batch)
+# print("\nOutput shape:", out.shape)
+# print(out)
+
+
+total_params = sum(p.numel() for p in model.parameters())
+# print(f"Total number of parameters: {total_params:,}")
+
+
+# print("Token embedding layer shape:", model.tok_emb.weight.shape)
+# print("Output layer shape:", model.out_head.weight.shape)
+
+
+total_params_gpt2 =  total_params - sum(p.numel() for p in model.out_head.parameters())
+# print(f"Number of trainable parameters considering weight tying: {total_params_gpt2:,}")
+
+
+
+# Calculate the total size in bytes (assuming float32, 4 bytes per parameter)
+total_size_bytes = total_params * 4
+
+# Convert to megabytes
+total_size_mb = total_size_bytes / (1024 * 1024)
+
+# print(f"Total size of the model: {total_size_mb:.2f} MB")
+
+
+# =============
+
+# gen text simple
+# model: gpt model
+# idx: (1, 1024); tensor([[15496,    11,   314,   716, 27018, 24086]]), append to end
+# max_new_tokens: 6
+# context_size: 1024
+def generate_text_simple(model, idx, max_new_tokens, context_size):
+    
+
+    # max_new_tokens = 6
+    for _ in range(max_new_tokens):
+        
+        # ":" all batch
+        # context_size: take last 1024
+        # (b, 1024)
+        idx_cond = idx[:, -context_size:]
+        
+        # Get the predictions
+        with torch.no_grad():
+            logits = model(idx_cond)
+
+        print(logits)
+        
+        # Focus only on the last time step
+        # (batch, n_tokens, vocab_size) becomes (batch, vocab_size)
+        logits = logits[:, -1, :]  
+
+        # Apply softmax to get probabilities
+        probas = torch.softmax(logits, dim=-1)  # (batch, vocab_size)
+
+        # Get the idx of the vocab entry with the highest probability value
+        idx_next = torch.argmax(probas, dim=-1, keepdim=True)  # (batch, 1)
+
+        # Append sampled index to the running sequence
+        idx = torch.cat((idx, idx_next), dim=1)  # (batch, n_tokens+1)
+
+    return idx
+
+
+# start context
+start_context = "Hello, I am"
+
+# tokenizer encode the text
+encoded = tokenizer.encode(start_context)
+
+# encode then becomes tensor
+encoded_tensor = torch.tensor(encoded).unsqueeze(0)
+
+
+
+
+# no drop out
+model.eval() # disable dropout
+
+out = generate_text_simple(
+    # the gpt model
+    model=model,
+    # text encode tensor
+    # "Hello, I am"
+    idx=encoded_tensor, 
+    # max 6 new token
+    max_new_tokens=6, 
+    # 1024
+    context_size=GPT_CONFIG_124M["context_length"]
+)
+
+
+
+
+decoded_text = tokenizer.decode(out.squeeze(0).tolist())
+# print(decoded_text)
