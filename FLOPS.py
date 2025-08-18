@@ -151,12 +151,18 @@ BASE_CONFIG = {
 }
 
 # embed size 1600, layer 48, n head 25
+# model_configs = {
+#     "gpt-small (124M)": {"emb_dim": 768, "n_layers": 12, "n_heads": 12},   # Smallest model
+#     "gpt-medium (355M)": {"emb_dim": 1024, "n_layers": 24, "n_heads": 16}, # Medium model
+#     "gpt-large (774M)": {"emb_dim": 1280, "n_layers": 36, "n_heads": 20},  # Large model
+#     "gpt-xl (1558M)": {"emb_dim": 1600, "n_layers": 48, "n_heads": 25},    # Extra large model
+# }
+
 model_configs = {
     "gpt-small (124M)": {"emb_dim": 768, "n_layers": 12, "n_heads": 12},   # Smallest model
     "gpt-medium (355M)": {"emb_dim": 1024, "n_layers": 24, "n_heads": 16}, # Medium model
-    "gpt-large (774M)": {"emb_dim": 1280, "n_layers": 36, "n_heads": 20},  # Large model
-    "gpt-xl (1558M)": {"emb_dim": 1600, "n_layers": 48, "n_heads": 25},    # Extra large model
 }
+
 
 # cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -196,3 +202,77 @@ for size in model_configs:
     del model
     # Clear GPU cache to prevent memory buildup
     torch.cuda.empty_cache()
+
+
+
+# ===============
+# Simple benchmark with automatic batch size finding
+
+# loop each model to test max batch size
+for size in model_configs:
+    # which model we test
+    print(f"\nProcessing {size}")
+    # create a copy of config
+    config = BASE_CONFIG.copy()
+    # Update config with specific model size parameters (emb_dim, n_layers, n_heads)
+    config.update(model_configs[size])
+
+    # binary search to find the max batch size
+    # smallest batch size to try
+    min_batch_size = 1                    
+    max_batch_size = None                 # Will store the largest successful batch size
+    # Upper limit for binary search
+    # max_possible_batch_size = 4096
+    max_possible_batch_size = 64            
+
+    # Binary search to find maximum batch size that fits in memory
+    while min_batch_size <= max_possible_batch_size:
+        # Calculate middle point for binary search
+        batch_size = (min_batch_size + max_possible_batch_size) // 2
+        try:
+            # Create random input tensor with current batch size and sequence length
+            input_tensor = torch.randint(
+                0, config["vocab_size"],           # Random token IDs from 0 to vocab_size
+                (batch_size, config["context_length"]), # Shape: (batch, sequence_length)
+                device=device                      # Put on GPU if available
+            )
+
+            # Create model with current config, convert to bfloat16, move to device
+            model = GPTModel(config).bfloat16().to(device)
+
+            # MACS = multiply-accumulate operations
+            # MACS are typically counted as two FLOPS (one multiply and one accumulate)
+            # Profile the model to count operations and parameters
+            macs, params = profile(model, inputs=(input_tensor,), verbose=False)
+            # Convert MACs to FLOPs (1 MAC = 2 FLOPs)
+            flops = 2 * macs
+            # Print the FLOP count for this batch size
+            print(f"  Batch size {batch_size}: {flops:.1e} FLOPS")
+
+            # If successful, try a larger batch size (search upper half)
+            min_batch_size = batch_size + 1
+            # Remember this as the largest successful batch size so far
+            max_batch_size = batch_size
+
+            # Clean up memory to prevent accumulation
+            del model, input_tensor
+            # Clear GPU cache to free up VRAM
+            torch.cuda.empty_cache()
+
+        # Catch memory errors when batch size is too large
+        except RuntimeError as e:
+            # Check if the error is specifically about running out of memory
+            if "out of memory" in str(e):
+                # Try smaller batch size (search lower half)
+                max_possible_batch_size = batch_size - 1
+
+                # Clean up any partially created objects
+                try:
+                    del model, input_tensor
+                    torch.cuda.empty_cache()
+                except NameError:
+                    # Objects might not exist if error occurred early
+                    pass
+            else:
+                # Re-raise non-memory errors
+                raise e
