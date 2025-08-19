@@ -63,7 +63,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             # this is 1st token
             if self.cache_k is None:
-                # cache key and value
+                # cache key and value; later we need to add to list
                 self.cache_k, self.cache_v = keys_new, values_new
             else:
                 # self.cache_k = [batch, heads, 2_tokens, head_dim]  
@@ -148,6 +148,8 @@ class MultiHeadAttention(nn.Module):
 
     ####################################################
     # NEW
+
+    # clean all k cache, v cache and reset posi
     def reset_cache(self):
         self.cache_k, self.cache_v = None, None
         self.ptr_current_pos = 0
@@ -198,6 +200,8 @@ class FeedForward(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+
+        # multi head attn
         self.att = MultiHeadAttention(
             d_in=cfg["emb_dim"],
             d_out=cfg["emb_dim"],
@@ -210,6 +214,7 @@ class TransformerBlock(nn.Module):
         self.norm2 = LayerNorm(cfg["emb_dim"])
         self.drop_shortcut = nn.Dropout(cfg["drop_rate"])
 
+    # ok, so the self run === forward func
     def forward(self, x, use_cache=False):
         # Shortcut connection for attention block
         shortcut = x
@@ -218,6 +223,8 @@ class TransformerBlock(nn.Module):
         # x = self.att(x)   # Shape [batch_size, num_tokens, emb_size]
         ####################################################
         # NEW
+
+        # forward use cache
         x = self.att(x, use_cache=use_cache)
         ####################################################
 
@@ -245,6 +252,8 @@ class GPTModel(nn.Module):
         #    *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
         ####################################################
         # NEW
+
+        # multi transformer block
         self.trf_blocks = nn.ModuleList(
             [TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
 
@@ -264,6 +273,7 @@ class GPTModel(nn.Module):
         # NEW
 
         if use_cache:
+            # update global postiion ids
             pos_ids = torch.arange(self.current_pos, self.current_pos + seq_len, device=in_idx.device, dtype=torch.long)
             self.current_pos += seq_len
         else:
@@ -277,6 +287,8 @@ class GPTModel(nn.Module):
         # x = self.trf_blocks(x)
         ####################################################
         # NEW
+
+        # multi head forward
         for blk in self.trf_blocks:
             x = blk(x, use_cache=use_cache)
         ####################################################
@@ -287,6 +299,10 @@ class GPTModel(nn.Module):
 
     ####################################################
     # NEW
+
+    # 1. cache: 1 by 1
+    # 2. no cache: whole
+    # reset all transformer block, each block clean up kv cache and reset posi
     def reset_kv_cache(self):
         for blk in self.trf_blocks:
             blk.att.reset_cache()
@@ -327,6 +343,8 @@ def generate_text_simple_cached(model, idx, max_new_tokens,
     model.eval()
     ctx_len = context_size or model.pos_emb.num_embeddings
 
+    # 1. cache: only new token
+    # 2. no cache: entire
     with torch.no_grad():
         if use_cache:
             # Init cache with full prompt
