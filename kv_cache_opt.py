@@ -12,6 +12,7 @@ import torch.nn as nn
 # Chapter 3
 #####################################
 class MultiHeadAttention(nn.Module):
+    # OPTIMIZATION: Added max_seq_len and window_size parameters for bounded memory usage
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False, max_seq_len=None, window_size=None):
         super().__init__()
         assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
@@ -27,11 +28,13 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         ####################################################
-        # NEW
+        # OPTIMIZATION: Window size for bounded cache (vs unbounded growth in original)
         self.max_seq_len = max_seq_len or context_length
         self.window_size = window_size or self.max_seq_len
+        # CHANGE: Removed global mask registration - computed dynamically now
         self.register_buffer("cache_k", None, persistent=False)
         self.register_buffer("cache_v", None, persistent=False)
+        # CHANGE: No ptr_current_pos here - using local ptr_cur instead
         ####################################################
 
     def forward(self, x, use_cache=False):
@@ -47,14 +50,16 @@ class MultiHeadAttention(nn.Module):
         values_new = values_new.view(b, num_tokens, self.num_heads, self.head_dim)
         queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
 
+        # OPTIMIZATION: Move transpose earlier to match cache format
         # Transpose: (b, num_tokens, num_heads, head_dim) -> (b, num_heads, num_tokens, head_dim)
         keys_new = keys_new.transpose(1, 2)
         values_new = values_new.transpose(1, 2)
         queries = queries.transpose(1, 2)
 
         ####################################################
-        # NEW
+        # OPTIMIZATION: Pre-allocated cache with sliding window (vs dynamic torch.cat)
         if use_cache:
+            # CHANGE: Pre-allocate fixed-size cache instead of dynamic growth
             if self.cache_k is None or self.cache_k.size(0) != b:
                 self.cache_k = torch.zeros(b, self.num_heads,
                                            self.window_size, self.head_dim,
@@ -62,14 +67,15 @@ class MultiHeadAttention(nn.Module):
                 self.cache_v = torch.zeros_like(self.cache_k)
                 self.ptr_cur = 0  # pointer to next free slot
 
-            # if incoming chunk would overflow discard oldest tokens
+            # OPTIMIZATION: Handle overflow with sliding window (vs unbounded growth)
             if self.ptr_cur + num_tokens > self.window_size:
                 overflow = self.ptr_cur + num_tokens - self.window_size
-                # shift everything left by `overflow` (cheap view-copy)
+                # PERFORMANCE: Efficient left-shift using view operations (vs torch.cat)
                 self.cache_k[:, :, :-overflow, :] = self.cache_k[:, :, overflow:, :].clone()
                 self.cache_v[:, :, :-overflow, :] = self.cache_v[:, :, overflow:, :].clone()
                 self.ptr_cur -= overflow  # pointer after shift
 
+            # PERFORMANCE: In-place assignment (vs expensive torch.cat operations)
             self.cache_k[:, :, self.ptr_cur:self.ptr_cur + num_tokens, :] = keys_new
             self.cache_v[:, :, self.ptr_cur:self.ptr_cur + num_tokens, :] = values_new
             self.ptr_cur += num_tokens
@@ -84,14 +90,15 @@ class MultiHeadAttention(nn.Module):
         attn_scores = queries @ keys.transpose(2, 3)  # Dot product for each head
 
         ####################################################
-        # NEW
+        # OPTIMIZATION: Dynamic causal mask computation (vs static pre-registered mask)
         K = attn_scores.size(-1)
 
         if num_tokens == K:
-            # No cache → use the pre‑baked triangular mask slice
+            # No cache → use the standard triangular mask
             causal_mask = torch.triu(torch.ones(num_tokens, K, device=x.device, dtype=torch.bool), diagonal=1)
         else:
-            # Cached: need to offset the diagonal by (K − num_tokens)
+            # IMPROVEMENT: Proper offset handling for cached attention
+            # Original had complex ptr_current_pos tracking, this is cleaner
             offset = K - num_tokens  # number of tokens already in cache before this chunk
             row_idx = torch.arange(num_tokens, device=x.device).unsqueeze(1)  # (num_tokens, 1)
             col_idx = torch.arange(K, device=x.device).unsqueeze(0)           # (1, K)
@@ -114,7 +121,7 @@ class MultiHeadAttention(nn.Module):
         return context_vec
 
     ####################################################
-    # NEW
+    # SIMPLIFICATION: Cleaner cache reset (no ptr_current_pos to track)
     def reset_cache(self):
         self.cache_k, self.cache_v = None, None
     ####################################################
@@ -171,7 +178,7 @@ class TransformerBlock(nn.Module):
             num_heads=cfg["n_heads"],
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"],
-            window_size=cfg["kv_window_size"] if "kv_window_size" in cfg else cfg["context_length"]   # NEW
+            window_size=cfg["kv_window_size"] if "kv_window_size" in cfg else cfg["context_length"]   # OPTIMIZATION: Configurable window size
         )
         self.ff = FeedForward(cfg)
         self.norm1 = LayerNorm(cfg["emb_dim"])
@@ -212,10 +219,11 @@ class GPTModel(nn.Module):
         # self.trf_blocks = nn.Sequential(
         #    *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
         ####################################################
-        # NEW
+        # CHANGE: ModuleList for iteration (vs Sequential)
         self.trf_blocks = nn.ModuleList(
             [TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
 
+        # KEPT: Global position tracking for positional embeddings
         self.ptr_current_pos = 0
         ####################################################
 
@@ -229,8 +237,8 @@ class GPTModel(nn.Module):
         # pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
 
         ####################################################
-        # NEW
-
+        # OPTIMIZATION: Proper positional encoding for cached generation
+        # Original had complex masking logic, this handles position more cleanly
         if use_cache:
             pos_ids = torch.arange(self.ptr_current_pos, self.ptr_current_pos + seq_len, device=in_idx.device, dtype=torch.long)
             self.ptr_current_pos += seq_len
@@ -244,7 +252,7 @@ class GPTModel(nn.Module):
 
         # x = self.trf_blocks(x)
         ####################################################
-        # NEW
+        # CHANGE: Manual iteration for cache control (vs Sequential)
         for blk in self.trf_blocks:
             x = blk(x, use_cache=use_cache)
         ####################################################
@@ -323,7 +331,7 @@ def main():
         "n_layers": 12,          # Number of layers
         "drop_rate": 0.1,        # Dropout rate
         "qkv_bias": False,       # Query-Key-Value bias
-        "kv_window_size": 1024   # NEW: KV cache window size
+        "kv_window_size": 1024   # OPTIMIZATION: Bounded cache size (vs unbounded growth)
     }
 
     torch.manual_seed(123)
