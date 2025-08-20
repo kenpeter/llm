@@ -2,6 +2,7 @@
 # throughout Chapters 3-4.
 # This file can be run as a standalone script.
 
+# import time, tokenizer, torch, nn
 import time
 import tiktoken
 import torch
@@ -29,8 +30,15 @@ class MultiHeadAttention(nn.Module):
 
         ####################################################
         # OPTIMIZATION: Window size for bounded cache (vs unbounded growth in original)
+
+        # max seq len = max seq len or context len
+        # 1024, 1024
         self.max_seq_len = max_seq_len or context_length
+
+        # max win size = win size or max seq len
+        # 1024
         self.window_size = window_size or self.max_seq_len
+
         # CHANGE: Removed global mask registration - computed dynamically now
         self.register_buffer("cache_k", None, persistent=False)
         self.register_buffer("cache_v", None, persistent=False)
@@ -40,7 +48,8 @@ class MultiHeadAttention(nn.Module):
     def forward(self, x, use_cache=False):
         b, num_tokens, d_in = x.shape
 
-        keys_new = self.W_key(x)  # Shape: (b, num_tokens, d_out)
+        # (b, num_tokens, d_out)
+        keys_new = self.W_key(x)  
         values_new = self.W_value(x)
         queries = self.W_query(x)
 
@@ -57,34 +66,51 @@ class MultiHeadAttention(nn.Module):
         queries = queries.transpose(1, 2)
 
         ####################################################
-        # OPTIMIZATION: Pre-allocated cache with sliding window (vs dynamic torch.cat)
+        # opt: pre allocate cache with sliding window
         if use_cache:
-            # CHANGE: Pre-allocate fixed-size cache instead of dynamic growth
+            # if chacke not there or batch size change
             if self.cache_k is None or self.cache_k.size(0) != b:
-                self.cache_k = torch.zeros(b, self.num_heads,
-                                           self.window_size, self.head_dim,
-                                           device=x.device)
-                self.cache_v = torch.zeros_like(self.cache_k)
-                self.ptr_cur = 0  # pointer to next free slot
+                # fixed cache: [b, head_n, token_n, head_dim * head_n]
+                # fixed cache: [b, head_n, token_n, head_dim]
+                # b, head num, win_size = token_n, head_dim = d_out // num_heads = 768 // 12 = 64
+                # init zero
+                self.cache_k = torch.zeros(b, self.num_heads, self.window_size, self.head_dim, device=x.device)
 
-            # OPTIMIZATION: Handle overflow with sliding window (vs unbounded growth)
+                # zeros (fresh) vs zeros like (copy)
+                self.cache_v = torch.zeros_like(self.cache_k)
+                self.ptr_cur = 0  # Initialize pointer to track next free slot in cache
+
+            # opt:
+            # if curr + len > win size
             if self.ptr_cur + num_tokens > self.window_size:
+                # cal how many tokens we need to discard
                 overflow = self.ptr_cur + num_tokens - self.window_size
-                # PERFORMANCE: Efficient left-shift using view operations (vs torch.cat)
+                
+                # :-1 means start from last but not include last (because ind on right)
+                # e.g. [A, B, C, D, E] -> add F -> [:, :, :-1_overflow, :] -> [:, :, 0:4, :] -> [:, :, 1_overflow:, :] -> [:, :, 1:5_copy, :]
                 self.cache_k[:, :, :-overflow, :] = self.cache_k[:, :, overflow:, :].clone()
                 self.cache_v[:, :, :-overflow, :] = self.cache_v[:, :, overflow:, :].clone()
-                self.ptr_cur -= overflow  # pointer after shift
+                self.ptr_cur -= overflow  # Update pointer after shifting data left
 
             # PERFORMANCE: In-place assignment (vs expensive torch.cat operations)
+            # Insert new keys at current pointer position
+            # [ptr_cur:ptr_cur + num_tokens] = slice for new tokens
             self.cache_k[:, :, self.ptr_cur:self.ptr_cur + num_tokens, :] = keys_new
             self.cache_v[:, :, self.ptr_cur:self.ptr_cur + num_tokens, :] = values_new
+
+            # because pointer is pt to the future.
             self.ptr_cur += num_tokens
 
+            # Extract active portion of cache (from start to current position)
+            # [:self.ptr_cur] = only the filled portion, not the entire window
             keys = self.cache_k[:, :, :self.ptr_cur, :]
             values = self.cache_v[:, :, :self.ptr_cur, :]
         else:
+            # No caching: use only current tokens (standard attention)
             keys, values = keys_new, values_new
-            self.ptr_cur = 0  # keep pointer sane if you interleave modes
+            self.ptr_cur = 0  # Reset pointer when switching between cache/no-cache modes
+
+
         ####################################################
         # Compute scaled dot-product attention (aka self-attention) with a causal mask
         attn_scores = queries @ keys.transpose(2, 3)  # Dot product for each head
@@ -178,6 +204,8 @@ class TransformerBlock(nn.Module):
             num_heads=cfg["n_heads"],
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"],
+            # win size from config
+            # either kv_window_size or context_length
             window_size=cfg["kv_window_size"] if "kv_window_size" in cfg else cfg["context_length"]   # OPTIMIZATION: Configurable window size
         )
         self.ff = FeedForward(cfg)
@@ -323,15 +351,23 @@ def generate_text_simple_cached(model, idx, max_new_tokens, context_size=None, u
 
 
 def main():
+    # this is the config
     GPT_CONFIG_124M = {
-        "vocab_size": 50257,     # Vocabulary size
-        "context_length": 1024,  # Context length
+        # vocab size 50257
+        "vocab_size": 50257,
+        # Context length 1024
+        "context_length": 1024,  
         "emb_dim": 768,          # Embedding dimension
-        "n_heads": 12,           # Number of attention heads
-        "n_layers": 12,          # Number of layers
-        "drop_rate": 0.1,        # Dropout rate
-        "qkv_bias": False,       # Query-Key-Value bias
-        "kv_window_size": 1024   # OPTIMIZATION: Bounded cache size (vs unbounded growth)
+        # 12 heads
+        "n_heads": 12,
+        # 12 layers
+        "n_layers": 12,
+        # drop rate 0.1
+        "drop_rate": 0.1,
+        # qkv bias
+        "qkv_bias": False,
+        # op: kv win size 1-24
+        "kv_window_size": 1024
     }
 
     torch.manual_seed(123)
