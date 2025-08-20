@@ -71,6 +71,8 @@ class MultiHeadAttention(nn.Module):
                 # at dim=1, [batch, heads, 2_tokens, head_dim] + [batch, heads, 1_token, head_dim] = [batch, heads, 3_token, head_dim]
                 self.cache_k = torch.cat([self.cache_k, keys_new], dim=1)
                 self.cache_v = torch.cat([self.cache_v, values_new], dim=1)
+
+            # here we feed the cache_k and cache_v back to keys and values for later use
             keys, values = self.cache_k, self.cache_v
         else:
             keys, values = keys_new, values_new
@@ -380,6 +382,7 @@ def main():
     }
 
     torch.manual_seed(123)
+    # input -> model -> token embed + posi embed -> transformer block (attention layer + feed forward layer) -> norm -> logi
     model = GPTModel(GPT_CONFIG_124M)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
