@@ -20,7 +20,8 @@ class MultiHeadAttention(nn.Module):
 
         self.d_out = d_out
         self.num_heads = num_heads
-        self.head_dim = d_out // num_heads  # Reduce the projection dim to match desired output dim
+        # head_n * head_dim = d_out
+        self.head_dim = d_out // num_heads 
 
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
@@ -46,21 +47,21 @@ class MultiHeadAttention(nn.Module):
         ####################################################
 
     def forward(self, x, use_cache=False):
+        # x: (b, token_n, d_out)
         b, num_tokens, d_in = x.shape
 
-        # (b, num_tokens, d_out)
+        # (b, token_n, d_out)
         keys_new = self.W_key(x)  
         values_new = self.W_value(x)
         queries = self.W_query(x)
 
-        # We implicitly split the matrix by adding a `num_heads` dimension
-        # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
+        # (b, token_n, d_out) -> (b, token_n, head_n, head_dim)
         keys_new = keys_new.view(b, num_tokens, self.num_heads, self.head_dim)
         values_new = values_new.view(b, num_tokens, self.num_heads, self.head_dim)
         queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
 
-        # OPTIMIZATION: Move transpose earlier to match cache format
-        # Transpose: (b, num_tokens, num_heads, head_dim) -> (b, num_heads, num_tokens, head_dim)
+        # opt
+        # (b, token_n, d_out) -> (b, token_n, head_n, head_dim) -> (b, head_n, token_n, head_dim)
         keys_new = keys_new.transpose(1, 2)
         values_new = values_new.transpose(1, 2)
         queries = queries.transpose(1, 2)
@@ -70,10 +71,8 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             # if chacke not there or batch size change
             if self.cache_k is None or self.cache_k.size(0) != b:
-                # fixed cache: [b, head_n, token_n, head_dim * head_n]
-                # fixed cache: [b, head_n, token_n, head_dim]
-                # b, head num, win_size = token_n, head_dim = d_out // num_heads = 768 // 12 = 64
-                # init zero
+                # token_n === win size
+                # (b, token_n, d_out) -> (b, token_n, head_n, head_dim) -> (b, head_n, token_n, head_dim) -> cache format
                 self.cache_k = torch.zeros(b, self.num_heads, self.window_size, self.head_dim, device=x.device)
 
                 # zeros (fresh) vs zeros like (copy)
@@ -90,19 +89,19 @@ class MultiHeadAttention(nn.Module):
                 # e.g. [A, B, C, D, E] -> add F -> [:, :, :-1_overflow, :] -> [:, :, 0:4, :] -> [:, :, 1_overflow:, :] -> [:, :, 1:5_copy, :]
                 self.cache_k[:, :, :-overflow, :] = self.cache_k[:, :, overflow:, :].clone()
                 self.cache_v[:, :, :-overflow, :] = self.cache_v[:, :, overflow:, :].clone()
-                self.ptr_cur -= overflow  # Update pointer after shifting data left
+                # slide win pointer pointer
+                # because point points to the future, -overflow
+                self.ptr_cur -= overflow
 
-            # PERFORMANCE: In-place assignment (vs expensive torch.cat operations)
-            # Insert new keys at current pointer position
-            # [ptr_cur:ptr_cur + num_tokens] = slice for new tokens
+            # keys_new assign to 3 dim only, others kept
             self.cache_k[:, :, self.ptr_cur:self.ptr_cur + num_tokens, :] = keys_new
             self.cache_v[:, :, self.ptr_cur:self.ptr_cur + num_tokens, :] = values_new
 
             # because pointer is pt to the future.
             self.ptr_cur += num_tokens
 
-            # Extract active portion of cache (from start to current position)
-            # [:self.ptr_cur] = only the filled portion, not the entire window
+            # only use active portion of tokens, avoid most zeros to attention
+            # [:, :, :self.ptr_cur, :] === [:, :, self.ptr_cur:self.ptr_cur + num_tokens, :]
             keys = self.cache_k[:, :, :self.ptr_cur, :]
             values = self.cache_v[:, :, :self.ptr_cur, :]
         else:
@@ -116,7 +115,7 @@ class MultiHeadAttention(nn.Module):
         attn_scores = queries @ keys.transpose(2, 3)  # Dot product for each head
 
         ####################################################
-        # OPTIMIZATION: Dynamic causal mask computation (vs static pre-registered mask)
+        # opt: Dynamic causal mask computation (vs static pre-registered mask)
         K = attn_scores.size(-1)
 
         if num_tokens == K:
