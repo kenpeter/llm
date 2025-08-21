@@ -114,8 +114,8 @@ class MultiHeadAttention(nn.Module):
 
 
         ####################################################
-        # Compute scaled dot-product attention (aka self-attention) with a causal mask
-
+        
+        # query token size diff from value token size
         # q.shape = [b, head_n, token_n_q, head_dim]
         # k.shape = [b, head_n, token_n_k, head_dim]
         # [b, head_n, token_n_q, head_dim] @ [b, head_n, token_n_k, head_dim].T(2, 3) -> [b, head_n, token_n_q, token_n_k]
@@ -126,19 +126,19 @@ class MultiHeadAttention(nn.Module):
         attn_scores = queries @ keys.transpose(2, 3)
 
         ####################################################
-        # opt: Dynamic causal mask computation
-        # query token size will be very diff from key token size, hence token_n_q vs token_n_k
+        # opt:
+        # query token size diff from value token size
         # [b, head_n, token_n_q, token_n_k] -> size(-1) -> token_n_k
         K = attn_scores.size(-1)
 
-        # num_tokens is the new token process now
-        # k is number of key token in attention
+        # token_n is newly processed token
+        # K = cached + new
         if num_tokens == K:
-            # no cache: use the standard triangular mask
+            # no cache
+            # row: token_n (new token)
+            # col: K (everything)
             causal_mask = torch.triu(torch.ones(num_tokens, K, device=x.device, dtype=torch.bool), diagonal=1)
         else:
-            # IMPROVEMENT: Proper offset handling for cached attention
-            # Original had complex ptr_current_pos tracking, this is cleane
             
             # we have local sequence (row: new token; col: everything) and global sequence (everything) concept
             offset = K - num_tokens 
