@@ -120,6 +120,7 @@ class MultiHeadAttention(nn.Module):
 
         ####################################################
         # opt: Dynamic causal mask computation (vs static pre-registered mask)
+        # [b, head_n, token_n_q, token_n_k] -> size(-1) -> token_n_k
         K = attn_scores.size(-1)
 
         if num_tokens == K:
