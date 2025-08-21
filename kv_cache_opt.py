@@ -112,6 +112,10 @@ class MultiHeadAttention(nn.Module):
 
         ####################################################
         # Compute scaled dot-product attention (aka self-attention) with a causal mask
+
+        # q.shape = [b, head_n, token_n_q, head_dim]
+        # k.shape = [b, head_n, token_n_k, head_dim]
+        # [b, head_n, token_n_q, head_dim] @ [b, head_n, token_n_k, head_dim].T(2, 3) -> [b, head_n, token_n_q, token_n_k]
         attn_scores = queries @ keys.transpose(2, 3)  # Dot product for each head
 
         ####################################################
