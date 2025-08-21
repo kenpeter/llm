@@ -183,7 +183,9 @@ class MultiHeadAttention(nn.Module):
             causal_mask = row_idx + offset < col_idx                          # True where j > i+offset
         ####################################################
 
-        # Use the mask to fill attention scores
+        # attn_scores: [batch, heads, token_n, K]  -> (1, 12, 2, 5)
+        # causal_mask: [token_n, K] -> (2, 5)
+        # doulbe unsqueeze(0) -> (1, 1, 2, 5)
         attn_scores.masked_fill_(causal_mask.unsqueeze(0).unsqueeze(0), -torch.inf)
 
         attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
