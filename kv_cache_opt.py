@@ -13,16 +13,28 @@ import torch.nn as nn
 # Chapter 3
 #####################################
 class MultiHeadAttention(nn.Module):
-    # opt: max_seq_len (model can handle) and window_size (slide window for kv cache)
+    # multi head
+    # d_in 768
+    # d_out 768
+    # context_length 1024
+    # dropout 0.1
+    # num_heads 12
+    # max_seq_len 1024
+    # window_size 1024
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False, max_seq_len=None, window_size=None):
+        # super init
         super().__init__()
+        # d_out // head_n = head_dim
         assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
 
+        # d_out
         self.d_out = d_out
+        # 12
         self.num_heads = num_heads
         # head_n * head_dim = d_out
         self.head_dim = d_out // num_heads 
 
+        # w_q, w_k, w_val, proj, dropout
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
@@ -30,24 +42,23 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         ####################################################
-        # opt, has limited win size
-
-        # max model can handle
-        # 1024, 1024
+        
+        # opt
+        # max_seq_len: what we want to use
+        # context_length: model can handle
+        # win_size: slide
         self.max_seq_len = max_seq_len or context_length
 
-        # max win for slide win
-        # 1024
         self.window_size = window_size or self.max_seq_len
 
-        # CHANGE: Removed global mask registration - computed dynamically now
+        # regi buffer, cache_k, cache_v
         self.register_buffer("cache_k", None, persistent=False)
         self.register_buffer("cache_v", None, persistent=False)
         # CHANGE: No ptr_current_pos here - using local ptr_cur instead
         ####################################################
 
     def forward(self, x, use_cache=False):
-        # x: (b, token_n, d_out)
+        # x input: (b, token_n, d_out)
         b, num_tokens, d_in = x.shape
 
         # (b, token_n, d_out)
@@ -275,7 +286,7 @@ class TransformerBlock(nn.Module):
         ####################################################
         # NEW
 
-        # run the attention
+        # transformer block -> attention ->
         x = self.att(x, use_cache=use_cache)
         ####################################################
 
@@ -295,6 +306,11 @@ class TransformerBlock(nn.Module):
 class GPTModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        # [50257, 768]
+        # this is the big dict
+        # vocab_size (row): we have 50257 rows
+        # emb_dim (col): each row has len 768
+        # embed will make 1st param (look up) disappear, 2nd param stay
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
         self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
         self.drop_emb = nn.Dropout(cfg["drop_rate"])
@@ -314,14 +330,15 @@ class GPTModel(nn.Module):
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
 
     def forward(self, in_idx, use_cache=False):
+        # idx: (b, seq_len) -> [[v1, v2, v3]]
         batch_size, seq_len = in_idx.shape
+        # tok_emb: [b, seq_len, emb_dim]-> [1, 1024, 768]
         tok_embeds = self.tok_emb(in_idx)
 
         # pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
 
         ####################################################
-        # opt: Proper positional encoding for cached generation
-        # Original had complex masking logic, this handles position more cleanly
+        # opt
         if use_cache:
             # use cache
             # position arr
@@ -333,10 +350,16 @@ class GPTModel(nn.Module):
         else:
             # no cache, entire postion arr, just from zero
             pos_ids = torch.arange(0, seq_len, device=in_idx.device, dtype=torch.long)
+
+        # in_idx: [b, token_n] -> [1, 4] -> look up 50257->768 (embed) -> [1, 4_row, 768_col]
+        # pos_ids: [seq_len] -> [4] -> lookup 1024->768 (embed) -> [seq_len, 768] -> unsqueeze(0) -> [1, 4_row, 768_col]
+        # input x has batch, because it is input and model expect to be parallel process
+        # pos_ids has no batch, because it is pos index, and process in sequence.
         pos_embeds = self.pos_emb(pos_ids).unsqueeze(0)
         ####################################################
 
-        x = tok_embeds + pos_embeds  # Shape [batch_size, num_tokens, emb_size]
+        # x input shape: [b, token_n, seq_len]
+        x = tok_embeds + pos_embeds
         x = self.drop_emb(x)
 
         # x = self.trf_blocks(x)
@@ -358,7 +381,7 @@ class GPTModel(nn.Module):
         self.ptr_current_pos = 0
     ####################################################
 
-
+# not used this
 def generate_text_simple(model, idx, max_new_tokens, context_size):
     # idx is (B, T) array of indices in the current context
     for _ in range(max_new_tokens):
@@ -373,10 +396,11 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
             logits = model(idx_cond)
 
         # Focus only on the last time step
-        # (batch, n_token, vocab_size) becomes (batch, vocab_size)
+        # logit: (batch, n_token, vocab_size)
+        # (batch, vocab_size)
         logits = logits[:, -1, :]
 
-        # Get the idx of the vocab entry with the highest logits value
+        # 
         idx_next = torch.argmax(logits, dim=-1, keepdim=True)  # (batch, 1)
 
         # Append sampled index to the running sequence
@@ -391,7 +415,7 @@ def generate_text_simple_cached(model, idx, max_new_tokens, context_size=None, u
     # eval model
     model.eval()
 
-    # context size; max seq len
+    # context size or posi
     ctx_len = context_size or model.pos_emb.num_embeddings
 
     # no grade
