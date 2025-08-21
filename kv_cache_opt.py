@@ -341,7 +341,9 @@ def generate_text_simple_cached(model, idx, max_new_tokens, context_size=None, u
             logits = model(idx[:, -ctx_len:], use_cache=True)
 
             for _ in range(max_new_tokens):
+                # only new token = next_idx
                 next_idx = logits[:, -1].argmax(dim=-1, keepdim=True)
+                # stack only new token = next_idx
                 idx = torch.cat([idx, next_idx], dim=1)
                 logits = model(next_idx, use_cache=True)
         else:
