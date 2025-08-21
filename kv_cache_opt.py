@@ -13,7 +13,7 @@ import torch.nn as nn
 # Chapter 3
 #####################################
 class MultiHeadAttention(nn.Module):
-    # OPTIMIZATION: Added max_seq_len and window_size parameters for bounded memory usage
+    # opt: max_seq_len (model can handle) and window_size (slide window for kv cache)
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False, max_seq_len=None, window_size=None):
         super().__init__()
         assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
@@ -30,13 +30,13 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         ####################################################
-        # OPTIMIZATION: Window size for bounded cache (vs unbounded growth in original)
+        # opt, has limited win size
 
-        # max seq len = max seq len or context len
+        # max model can handle
         # 1024, 1024
         self.max_seq_len = max_seq_len or context_length
 
-        # max win size = win size or max seq len
+        # max win for slide win
         # 1024
         self.window_size = window_size or self.max_seq_len
 
@@ -60,15 +60,18 @@ class MultiHeadAttention(nn.Module):
         values_new = values_new.view(b, num_tokens, self.num_heads, self.head_dim)
         queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
 
-        # opt
+        # opt: do early
         # (b, token_n, d_out) -> (b, token_n, head_n, head_dim) -> (b, head_n, token_n, head_dim)
         keys_new = keys_new.transpose(1, 2)
         values_new = values_new.transpose(1, 2)
         queries = queries.transpose(1, 2)
 
         ####################################################
-        # opt: pre allocate cache with sliding window
+        # opt: build the large slide win buffer first
         if use_cache:
+            # ptr_cur for slide win
+            # self.ptr_current_pos track global token position
+
             # if chacke not there or batch size change
             if self.cache_k is None or self.cache_k.size(0) != b:
                 # token_n === win size
@@ -79,7 +82,7 @@ class MultiHeadAttention(nn.Module):
                 self.cache_v = torch.zeros_like(self.cache_k)
                 self.ptr_cur = 0  # Initialize pointer to track next free slot in cache
 
-            # opt:
+            # opt: slide win with buffer above
             # if curr + len > win size
             if self.ptr_cur + num_tokens > self.window_size:
                 # cal how many tokens we need to discard
@@ -116,22 +119,67 @@ class MultiHeadAttention(nn.Module):
         # q.shape = [b, head_n, token_n_q, head_dim]
         # k.shape = [b, head_n, token_n_k, head_dim]
         # [b, head_n, token_n_q, head_dim] @ [b, head_n, token_n_k, head_dim].T(2, 3) -> [b, head_n, token_n_q, token_n_k]
-        attn_scores = queries @ keys.transpose(2, 3)  # Dot product for each head
+        
+        # queries: what we ask
+        # keys: what we find out
+        # at the end, we want answer, attn_scores is related to k
+        attn_scores = queries @ keys.transpose(2, 3)
 
         ####################################################
-        # opt: Dynamic causal mask computation (vs static pre-registered mask)
+        # opt: Dynamic causal mask computation
+        # query token size will be very diff from key token size, hence token_n_q vs token_n_k
         # [b, head_n, token_n_q, token_n_k] -> size(-1) -> token_n_k
         K = attn_scores.size(-1)
 
+        # num_tokens is the new token process now
+        # k is number of key token in attention
         if num_tokens == K:
-            # No cache → use the standard triangular mask
+            # no cache: use the standard triangular mask
             causal_mask = torch.triu(torch.ones(num_tokens, K, device=x.device, dtype=torch.bool), diagonal=1)
         else:
             # IMPROVEMENT: Proper offset handling for cached attention
-            # Original had complex ptr_current_pos tracking, this is cleaner
-            offset = K - num_tokens  # number of tokens already in cache before this chunk
-            row_idx = torch.arange(num_tokens, device=x.device).unsqueeze(1)  # (num_tokens, 1)
-            col_idx = torch.arange(K, device=x.device).unsqueeze(0)           # (1, K)
+            # Original had complex ptr_current_pos tracking, this is cleane
+            
+            # we have local sequence (row: new token; col: everything) and global sequence (everything) concept
+            offset = K - num_tokens 
+            """
+                row_idx -> unsqueeze(1) -> (token_n, 1) -> [[0], [1]]
+                col_idx -> unsqueeze(0) -> (1, K) -> [[0, 1, 2, 3, 4]]
+
+                row_idx:
+                [
+                    [0, 0, 0, 0, 0], 
+                    [1, 1, 1, 1, 1]
+                ]
+
+                offset = 2
+
+                row_idx + offset -> [[0], [1]] -> [[3], [4]]
+
+                compare -> diff shape -> boardcasting
+
+                row_idx + offset:
+                [
+                    [3, 3, 3, 3, 3],
+                    [4, 4, 4, 4, 4]
+                ]  
+
+                col_idx:
+                [
+                    [0, 1, 2, 3, 4],
+                    [0, 1, 2, 3, 4]
+                ]
+
+                now we can compare
+
+                [3, 3, 3, 3, 3] < [0, 1, 2, 3, 4]
+                = [False, False, False, False, True]
+
+                [4, 4, 4, 4, 4] < [0, 1, 2, 3, 4]
+                = [False, False, False, False, False]
+            """
+            row_idx = torch.arange(num_tokens, device=x.device).unsqueeze(1)  # unsqueeze at index 1, (num_tokens, 1)
+            col_idx = torch.arange(K, device=x.device).unsqueeze(0)           # unsqueeze at index 0, (1, K)
             causal_mask = row_idx + offset < col_idx                          # True where j > i+offset
         ####################################################
 
@@ -208,9 +256,8 @@ class TransformerBlock(nn.Module):
             num_heads=cfg["n_heads"],
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"],
-            # win size from config
-            # either kv_window_size or context_length
-            window_size=cfg["kv_window_size"] if "kv_window_size" in cfg else cfg["context_length"]   # OPTIMIZATION: Configurable window size
+            # opt: has limited win size
+            window_size=cfg["kv_window_size"] if "kv_window_size" in cfg else cfg["context_length"]
         )
         self.ff = FeedForward(cfg)
         self.norm1 = LayerNorm(cfg["emb_dim"])
@@ -225,6 +272,8 @@ class TransformerBlock(nn.Module):
         # x = self.att(x)   # Shape [batch_size, num_tokens, emb_size]
         ####################################################
         # NEW
+
+        # run the attention
         x = self.att(x, use_cache=use_cache)
         ####################################################
 
@@ -269,12 +318,18 @@ class GPTModel(nn.Module):
         # pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
 
         ####################################################
-        # OPTIMIZATION: Proper positional encoding for cached generation
+        # opt: Proper positional encoding for cached generation
         # Original had complex masking logic, this handles position more cleanly
         if use_cache:
+            # use cache
+            # position arr
+            # seq_len is current input len
+            # win_size is limit
             pos_ids = torch.arange(self.ptr_current_pos, self.ptr_current_pos + seq_len, device=in_idx.device, dtype=torch.long)
+            # now we extend curr pos + seq_len
             self.ptr_current_pos += seq_len
         else:
+            # no cache, entire postion arr, just from zero
             pos_ids = torch.arange(0, seq_len, device=in_idx.device, dtype=torch.long)
         pos_embeds = self.pos_emb(pos_ids).unsqueeze(0)
         ####################################################
@@ -331,22 +386,32 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
 ####################################################
 # NEW
 def generate_text_simple_cached(model, idx, max_new_tokens, context_size=None, use_cache=True):
+    # eval model
     model.eval()
 
+    # context size; max seq len
     ctx_len = context_size or model.pos_emb.num_embeddings
 
+    # no grade
     with torch.no_grad():
+        # use cache
         if use_cache:
+            # reset kv cache
             model.reset_kv_cache()
+            # only get the range of token
             logits = model(idx[:, -ctx_len:], use_cache=True)
 
+            # only able to output 200 max tokens
             for _ in range(max_new_tokens):
-                # only new token = next_idx
+                # logits has the raw scores that possible output as next token
+                # argmax will return the index, so next token id
                 next_idx = logits[:, -1].argmax(dim=-1, keepdim=True)
-                # stack only new token = next_idx
+                # stack new token next_idx with old ones
                 idx = torch.cat([idx, next_idx], dim=1)
+                # pass new token to model
                 logits = model(next_idx, use_cache=True)
         else:
+            # no cache very similar
             for _ in range(max_new_tokens):
                 logits = model(idx[:, -ctx_len:], use_cache=False)
                 next_idx = logits[:, -1].argmax(dim=-1, keepdim=True)
@@ -406,9 +471,14 @@ def main():
 
     ####################################################
     # NEW
+
+    # gen text simple cache
     token_ids = generate_text_simple_cached(
+        # model
         model=model,
+        # token id
         idx=encoded_tensor,
+        # max new token 200
         max_new_tokens=200,
     )
     ####################################################
