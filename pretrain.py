@@ -204,10 +204,11 @@ class GPTModel(nn.Module):
         batch_size, seq_len = in_idx.shape
         tok_embeds = self.tok_emb(in_idx)
         pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
-        x = tok_embeds + pos_embeds  # Shape [batch_size, num_tokens, emb_size]
+        x = tok_embeds + pos_embeds  
         x = self.drop_emb(x)
         x = self.trf_blocks(x)
         x = self.final_norm(x)
+        # [b, token_n, vocab_size]
         logits = self.out_head(x)
         return logits
 
@@ -279,6 +280,7 @@ token_ids = generate_text_simple(
 inputs = torch.tensor([[16833, 3626, 6100],   # ["every effort moves",
                        [40,    1107, 588]])   #  "I really like"]
 
+# (b, vocab_size)
 targets = torch.tensor([[3626, 6100, 345  ],  # [" effort moves you",
                         [1107,  588, 11311]]) #  " really like chocolate"]
 
@@ -303,9 +305,29 @@ target_probas_2 = probas[text_idx, [0, 1, 2], targets[text_idx]]
 print("Text 2:", target_probas_2)
 
 
-# Compute logarithm of all token probabilities
+# so we stack the and get each log
+# the prob is small, so use log, posi > 0, nega < 0 to represent smallness
 log_probas = torch.log(torch.cat((target_probas_1, target_probas_2)))
 print(log_probas)
 
 avg_log_probas = torch.mean(log_probas)
 print(avg_log_probas)
+
+neg_avg_log_probas = avg_log_probas * -1
+print(neg_avg_log_probas)
+
+
+# [batch_size, num_tokens, vocab_size]
+print("Logits shape:", logits.shape)
+
+# [batch_size, num_tokens]
+print("Targets shape:", targets.shape)
+
+# [2, 3, 50257] -> flatten(0, 1), merge 0, 1 -> [6, 50257]
+logits_flat = logits.flatten(0, 1)
+# [2, 3] -> flatten() -> [6]
+targets_flat = targets.flatten()
+
+# x = token_embed + pos_embed -> logits = out_head(x) -> max logits[batch_i, token_j, target_id]
+print("Flattened logits:", logits_flat.shape)
+print("Flattened targets:", targets_flat.shape)
