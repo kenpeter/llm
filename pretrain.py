@@ -328,6 +328,13 @@ logits_flat = logits.flatten(0, 1)
 # [2, 3] -> flatten() -> [6]
 targets_flat = targets.flatten()
 
-# x = token_embed + pos_embed -> logits = out_head(x) -> max logits[batch_i, token_j, target_id]
+# x = token_embed + pos_embed -> go to out_head-> logit -> max logits[batch_i, token_j, target_id]
 print("Flattened logits:", logits_flat.shape)
 print("Flattened targets:", targets_flat.shape)
+
+# there is a hidden loop within cross entropy, which loop logit to match individual target
+loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+print(loss)
+
+perplexity = torch.exp(loss)
+print(perplexity)
