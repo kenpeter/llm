@@ -439,3 +439,12 @@ if total_tokens * (1-train_ratio) < GPT_CONFIG_124M["context_length"]:
     print("Not enough tokens for the validation loader. "
           "Try to lower the `GPT_CONFIG_124M['context_length']` or "
           "decrease the `training_ratio`")
+    
+
+print("Train loader:")
+for x, y in train_loader:
+    print(x.shape, y.shape)
+
+print("\nValidation loader:")
+for x, y in val_loader:
+    print(x.shape, y.shape)
