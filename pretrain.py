@@ -298,30 +298,30 @@ token_ids = torch.argmax(probas, dim=-1, keepdim=True)
 
 text_idx = 0
 target_probas_1 = probas[text_idx, [0, 1, 2], targets[text_idx]]
-print("Text 1:", target_probas_1)
+
 
 text_idx = 1
 target_probas_2 = probas[text_idx, [0, 1, 2], targets[text_idx]]
-print("Text 2:", target_probas_2)
+
 
 
 # so we stack the and get each log
 # the prob is small, so use log, posi > 0, nega < 0 to represent smallness
 log_probas = torch.log(torch.cat((target_probas_1, target_probas_2)))
-print(log_probas)
+
 
 avg_log_probas = torch.mean(log_probas)
-print(avg_log_probas)
+
 
 neg_avg_log_probas = avg_log_probas * -1
-print(neg_avg_log_probas)
+
 
 
 # [batch_size, num_tokens, vocab_size]
-print("Logits shape:", logits.shape)
+
 
 # [batch_size, num_tokens]
-print("Targets shape:", targets.shape)
+
 
 # [2, 3, 50257] -> flatten(0, 1), merge 0, 1 -> [6, 50257]
 logits_flat = logits.flatten(0, 1)
@@ -329,12 +329,91 @@ logits_flat = logits.flatten(0, 1)
 targets_flat = targets.flatten()
 
 # x = token_embed + pos_embed -> go to out_head-> logit -> max logits[batch_i, token_j, target_id]
-print("Flattened logits:", logits_flat.shape)
-print("Flattened targets:", targets_flat.shape)
+
 
 # there is a hidden loop within cross entropy, which loop logit to match individual target
 loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
-print(loss)
+
 
 perplexity = torch.exp(loss)
-print(perplexity)
+
+
+
+
+# ===========
+
+# import os request
+import os
+import urllib.request
+
+# get text online, then write to file, then read
+file_path = "the-verdict.txt"
+url = "https://raw.githubusercontent.com/rasbt/LLMs-from-scratch/main/ch02/01_main-chapter-code/the-verdict.txt"
+
+if not os.path.exists(file_path):
+    with urllib.request.urlopen(url) as response:
+        text_data = response.read().decode('utf-8')
+    with open(file_path, "w", encoding="utf-8") as file:
+        file.write(text_data)
+else:
+    with open(file_path, "r", encoding="utf-8") as file:
+        text_data = file.read()
+
+print(text_data[:99])
+
+print(text_data[-99:])
+
+total_characters = len(text_data)
+total_tokens = len(tokenizer.encode(text_data))
+
+print("Characters:", total_characters)
+print("Tokens:", total_tokens)
+
+
+
+# =========
+from previous_chapters import create_dataloader_v1
+# Alternatively:
+# from llms_from_scratch.ch02 import create_dataloader_v1
+
+# Train/validation ratio
+train_ratio = 0.90
+split_idx = int(train_ratio * len(text_data))
+train_data = text_data[:split_idx]
+val_data = text_data[split_idx:]
+
+
+
+
+torch.manual_seed(123)
+
+train_loader = create_dataloader_v1(
+    train_data,
+    batch_size=2,
+    max_length=GPT_CONFIG_124M["context_length"],
+    stride=GPT_CONFIG_124M["context_length"],
+    drop_last=True,
+    shuffle=True,
+    num_workers=0
+)
+
+val_loader = create_dataloader_v1(
+    val_data,
+    batch_size=2,
+    max_length=GPT_CONFIG_124M["context_length"],
+    stride=GPT_CONFIG_124M["context_length"],
+    drop_last=False,
+    shuffle=False,
+    num_workers=0
+)
+
+
+if total_tokens * (train_ratio) < GPT_CONFIG_124M["context_length"]:
+    print("Not enough tokens for the training loader. "
+          "Try to lower the `GPT_CONFIG_124M['context_length']` or "
+          "increase the `training_ratio`")
+
+if total_tokens * (1-train_ratio) < GPT_CONFIG_124M["context_length"]:
+    print("Not enough tokens for the validation loader. "
+          "Try to lower the `GPT_CONFIG_124M['context_length']` or "
+          "decrease the `training_ratio`")
