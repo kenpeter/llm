@@ -390,7 +390,7 @@ val_data = text_data[split_idx:]
 # seed
 torch.manual_seed(123)
 
-# loader
+# train_loader return input_batch and target_batch
 train_loader = create_dataloader_v1(
     # train data
     train_data,
@@ -475,7 +475,7 @@ print("All tokens:", train_tokens + val_tokens)
 
 # cal corss entropy loss for single batch
 def calc_loss_batch(input_batch, target_batch, model, device):
-    # by default most of things start in cpu, torch.tensor, etc, so we need to move to GPU
+    # by default most of things start in cpu, e.g. load file, torch.tensor, etc, so we need to move to GPU
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
     # use model's forward func to get logit
     logits = model(input_batch)
@@ -484,30 +484,32 @@ def calc_loss_batch(input_batch, target_batch, model, device):
     # 3. target: [1_b, 3_token_n] -> flat_all -> [3_token_n]
     # 4. cross entropy has internal loop -> loop logit match target
     loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten())
-    # Return the computed loss
+    # return loss
     return loss
 
 
-# Calculate average loss across multiple batches in a data loader
+# cal average loss in multi batch in data loader
 def calc_loss_loader(data_loader, model, device, num_batches=None):
-    # Initialize total loss accumulator
+    # total loss
     total_loss = 0.
-    # Return NaN if data loader is empty
+    # data loader empty
     if len(data_loader) == 0:
         return float("nan")
-    # Use all batches if num_batches not specified
     elif num_batches is None:
+        # 1. data loader return input batch and target batch. and we loop them together.
+        # 2. input batch (no shift one), target batch (shift one)
         num_batches = len(data_loader)
     else:
-        # Ensure num_batches doesn't exceed available batches
+        # limit
         num_batches = min(num_batches, len(data_loader))
-    # Iterate through batches in the data loader
+    # now loop both
     for i, (input_batch, target_batch) in enumerate(data_loader):
         # Process only the specified number of batches
         if i < num_batches:
-            # Calculate loss for current batch
+            # return single num, because big num no good.
+            # input_batch -> logit -> cal cross entropy loss with target_batch
             loss = calc_loss_batch(input_batch, target_batch, model, device)
-            # Accumulate loss (convert to Python float)
+            # just acc all loss
             total_loss += loss.item()
         else:
             # Stop processing after reaching num_batches
