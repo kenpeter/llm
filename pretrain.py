@@ -448,3 +448,16 @@ for x, y in train_loader:
 print("\nValidation loader:")
 for x, y in val_loader:
     print(x.shape, y.shape)
+
+
+train_tokens = 0
+for input_batch, target_batch in train_loader:
+    train_tokens += input_batch.numel()
+
+val_tokens = 0
+for input_batch, target_batch in val_loader:
+    val_tokens += input_batch.numel()
+
+print("Training tokens:", train_tokens)
+print("Validation tokens:", val_tokens)
+print("All tokens:", train_tokens + val_tokens)
