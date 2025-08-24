@@ -372,48 +372,70 @@ print("Tokens:", total_tokens)
 
 
 # =========
-from previous_chapters import create_dataloader_v1
-# Alternatively:
-# from llms_from_scratch.ch02 import create_dataloader_v1
 
-# Train/validation ratio
+
+# 90% train, 10% validation
 train_ratio = 0.90
+# cal ind to split the data
 split_idx = int(train_ratio * len(text_data))
+# 90% train
 train_data = text_data[:split_idx]
+# 10% validate
 val_data = text_data[split_idx:]
 
 
 
 
+# seed
 torch.manual_seed(123)
 
+# loader
 train_loader = create_dataloader_v1(
+    # train data
     train_data,
+    # 2 batch
     batch_size=2,
+    # max seq len 256
     max_length=GPT_CONFIG_124M["context_length"],
+    # slide win 256
     stride=GPT_CONFIG_124M["context_length"],
-    drop_last=True,
+    # drop the last incomplete batch
+    drop_last=True, 
+    # shuffle for better train 
     shuffle=True,
+    # zero worker
     num_workers=0
 )
 
+# validator
 val_loader = create_dataloader_v1(
+    # val data
     val_data,
+    # 2 batch
     batch_size=2,
+    # max seq len 256
     max_length=GPT_CONFIG_124M["context_length"],
+    # slide win 256
     stride=GPT_CONFIG_124M["context_length"],
+    # drop the last incomplete batch
     drop_last=False,
+    # no shuffle
     shuffle=False,
+    # zero worker
     num_workers=0
 )
 
 
+# must total_tokens * (train_ratio) >= context_length
 if total_tokens * (train_ratio) < GPT_CONFIG_124M["context_length"]:
+    # Print warning if insufficient training data
     print("Not enough tokens for the training loader. "
           "Try to lower the `GPT_CONFIG_124M['context_length']` or "
           "increase the `training_ratio`")
 
+# must total_tokens * (1 - train_ratio) >= context_length
 if total_tokens * (1-train_ratio) < GPT_CONFIG_124M["context_length"]:
+    # Print warning if insufficient validation data
     print("Not enough tokens for the validation loader. "
           "Try to lower the `GPT_CONFIG_124M['context_length']` or "
           "decrease the `training_ratio`")
