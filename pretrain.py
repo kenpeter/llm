@@ -35,6 +35,7 @@ class GPTDatasetV1(Dataset):
     def __len__(self):
         return len(self.input_ids)
 
+    # here we return input ids and target ids
     def __getitem__(self, idx):
         return self.input_ids[idx], self.target_ids[idx]
 
@@ -441,17 +442,24 @@ if total_tokens * (1-train_ratio) < GPT_CONFIG_124M["context_length"]:
           "decrease the `training_ratio`")
     
 
+# train shape
 print("Train loader:")
+# input shape and target shape
 for x, y in train_loader:
     print(x.shape, y.shape)
 
+# validation shape
 print("\nValidation loader:")
+# input shape and target shape
 for x, y in val_loader:
     print(x.shape, y.shape)
 
 
+# total training token
 train_tokens = 0
 for input_batch, target_batch in train_loader:
+    # numel: total number of elements
+    # 2D will destruct to 1D and count total number
     train_tokens += input_batch.numel()
 
 val_tokens = 0
@@ -461,3 +469,81 @@ for input_batch, target_batch in val_loader:
 print("Training tokens:", train_tokens)
 print("Validation tokens:", val_tokens)
 print("All tokens:", train_tokens + val_tokens)
+
+
+# ====================
+
+# cal corss entropy loss for single batch
+def calc_loss_batch(input_batch, target_batch, model, device):
+    # by default most of things start in cpu, torch.tensor, etc, so we need to move to GPU
+    input_batch, target_batch = input_batch.to(device), target_batch.to(device)
+    # use model's forward func to get logit
+    logits = model(input_batch)
+    # 1. input_batch: [1_b, 3_token_n]
+    # 2. logit: [1_b, 3_token_n, 50257_vocab_size] -> flat(0, 1) -> [3_token_n, 50257_vocab_size]
+    # 3. target: [1_b, 3_token_n] -> flat_all -> [3_token_n]
+    # 4. cross entropy has internal loop -> loop logit match target
+    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten())
+    # Return the computed loss
+    return loss
+
+
+# Calculate average loss across multiple batches in a data loader
+def calc_loss_loader(data_loader, model, device, num_batches=None):
+    # Initialize total loss accumulator
+    total_loss = 0.
+    # Return NaN if data loader is empty
+    if len(data_loader) == 0:
+        return float("nan")
+    # Use all batches if num_batches not specified
+    elif num_batches is None:
+        num_batches = len(data_loader)
+    else:
+        # Ensure num_batches doesn't exceed available batches
+        num_batches = min(num_batches, len(data_loader))
+    # Iterate through batches in the data loader
+    for i, (input_batch, target_batch) in enumerate(data_loader):
+        # Process only the specified number of batches
+        if i < num_batches:
+            # Calculate loss for current batch
+            loss = calc_loss_batch(input_batch, target_batch, model, device)
+            # Accumulate loss (convert to Python float)
+            total_loss += loss.item()
+        else:
+            # Stop processing after reaching num_batches
+            break
+    # Return average loss across all processed batches
+    return total_loss / num_batches
+
+
+# ============
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Note:
+# Uncommenting the following lines will allow the code to run on Apple Silicon chips, if applicable,
+# which is approximately 2x faster than on an Apple CPU (as measured on an M3 MacBook Air).
+# However, the resulting loss values may be slightly different.
+
+#if torch.cuda.is_available():
+#    device = torch.device("cuda")
+#elif torch.backends.mps.is_available():
+#    device = torch.device("mps")
+#else:
+#    device = torch.device("cpu")
+#
+# print(f"Using {device} device.")
+
+
+model.to(device) # no assignment model = model.to(device) necessary for nn.Module classes
+
+
+torch.manual_seed(123) # For reproducibility due to the shuffling in the data loader
+
+with torch.no_grad(): # Disable gradient tracking for efficiency because we are not training, yet
+    train_loss = calc_loss_loader(train_loader, model, device)
+    val_loss = calc_loss_loader(val_loader, model, device)
+
+print("Training loss:", train_loss)
+print("Validation loss:", val_loss)
