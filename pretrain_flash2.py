@@ -282,7 +282,7 @@ GPT_CONFIG_124M = {
     "emb_dim": 768,  # Embedding dimension
     "n_heads": 12,  # Number of attention heads
     "n_layers": 12,  # Number of layers
-    "drop_rate": 0.1,  # Dropout rate
+    "drop_rate": 0.3,  # Increased dropout rate to combat overfitting
     "qkv_bias": False,  # Query-key-value bias
 }
 
@@ -647,6 +647,12 @@ def main():
         default=0.8,
         help="Temperature for text generation sampling (default: 0.8)",
     )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=10,
+        help="Stop training if validation loss doesn't improve for N epochs (default: 10)",
+    )
 
     args = parser.parse_args()
 
@@ -732,8 +738,8 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
 
-    # Initialize optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1)
+    # Initialize optimizer with higher weight decay to combat overfitting
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.3)
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -751,12 +757,13 @@ def main():
             start_epoch = 0
             best_val_loss = float("inf")
 
-    # Training loop
+    # Training loop with early stopping
     print(f"\nStarting training from epoch {start_epoch}...")
     print("=" * 60)
     
     global_step = 0
     tokenizer = tiktoken.get_encoding("gpt2")
+    epochs_without_improvement = 0
 
     for epoch in range(start_epoch, args.epochs):
         # Train
@@ -785,13 +792,27 @@ def main():
         print(f"End of epoch sample: {generated_text}")
         print("-" * 60)
 
-        # Save best model
+        # Early stopping and best model tracking
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_without_improvement = 0
             print(f"New best validation loss: {best_val_loss:.4f}")
+            # Save best model immediately
+            save_checkpoint(
+                model, optimizer, epoch, val_loss, args.lr, args.checkpoint_dir
+            )
+        else:
+            epochs_without_improvement += 1
+            print(f"No improvement for {epochs_without_improvement}/{args.early_stopping_patience} epochs")
+            
+            # Early stopping check
+            if epochs_without_improvement >= args.early_stopping_patience:
+                print(f"\n🛑 Early stopping! No improvement for {args.early_stopping_patience} epochs.")
+                print(f"Best validation loss: {best_val_loss:.4f}")
+                break
 
         # Save checkpoint periodically
-        if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:
+        if (epoch + 1) % args.save_every == 0:
             save_checkpoint(
                 model, optimizer, epoch, val_loss, args.lr, args.checkpoint_dir
             )
