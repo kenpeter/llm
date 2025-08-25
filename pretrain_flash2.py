@@ -71,6 +71,7 @@ def create_dataloader_v1(
 
 try:
     from flash_attn import flash_attn_func
+
     FLASH_ATTN_AVAILABLE = True
     print("✅ Flash Attention 2 available")
 except ImportError:
@@ -81,87 +82,119 @@ except ImportError:
 class FlashAttention(nn.Module):
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
         super().__init__()
+        # Ensure output dimension is evenly divisible by number of heads
         assert d_out % num_heads == 0, "d_out must be divisible by n_heads"
 
+        # store attn param
+        # total output dim
         self.d_out = d_out
+        # number of attn head
         self.num_heads = num_heads
+        # head dim
         self.head_dim = d_out // num_heads
+        # drop prob
         self.dropout = dropout
 
-        # QKV projection in one linear layer for efficiency
+        # QKV projection in one linear layer for efficiency (instead of 3 separate)
         self.qkv_proj = nn.Linear(d_in, 3 * d_out, bias=qkv_bias)
+        # Output projection to combine multi-head results
         self.out_proj = nn.Linear(d_out, d_out)
-        
-        # Dropout layer
+
+        # Dropout layer for regularization
         self.dropout_layer = nn.Dropout(dropout)
 
     def forward(self, x):
-        global FLASH_ATTN_AVAILABLE  # Make sure we can access the global variable
+        # Access global Flash Attention availability flag
+        global FLASH_ATTN_AVAILABLE
+        # Get input tensor dimensions
         batch_size, seq_len, embed_dim = x.shape
 
-        # Project to Q, K, V in one go
+        # Project input to Q, K, V tensors in single operation
         qkv = self.qkv_proj(x)  # Shape: (batch_size, seq_len, 3 * d_out)
-        
+
         # Split and reshape for multi-head attention
+        # Reshape to separate Q, K, V and multi-heads
         qkv = qkv.view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 1, 3, 4)  # Shape: (3, batch_size, seq_len, num_heads, head_dim)
+        # Permute to get Q, K, V as separate tensors with head dimension
+        qkv = qkv.permute(
+            2, 0, 1, 3, 4
+        )  # Shape: (3, batch_size, seq_len, num_heads, head_dim)
+        # Extract Query, Key, Value tensors
         q, k, v = qkv[0], qkv[1], qkv[2]
 
+        # Try to use Flash Attention 2 if available
         if FLASH_ATTN_AVAILABLE:
-            # Use Flash Attention 2 - expects (batch, seq_len, num_heads, head_dim)
+            # Flash Attention 2 expects (batch, seq_len, num_heads, head_dim)
             try:
-                # Flash Attention expects fp16/bf16 for best performance
+                # Flash Attention works best with fp16/bf16 precision
                 if x.dtype in [torch.float32]:
+                    # Convert to half precision for Flash Attention
                     q, k, v = q.half(), k.half(), v.half()
                     use_fp16 = True
                 else:
                     use_fp16 = False
-                
-                # Flash attention function
+
+                # Call Flash Attention function with optimized CUDA kernels
                 attn_output = flash_attn_func(
-                    q, k, v,
-                    dropout_p=self.dropout if self.training else 0.0,
-                    causal=True,  # Causal mask for autoregressive generation
-                    softmax_scale=1.0 / (self.head_dim ** 0.5)
+                    q,
+                    k,
+                    v,
+                    dropout_p=(
+                        self.dropout if self.training else 0.0
+                    ),  # Apply dropout only during training
+                    causal=True,  # Causal mask for autoregressive generation (GPT-style)
+                    softmax_scale=1.0
+                    / (self.head_dim**0.5),  # Scale factor for attention scores
                 )
-                
-                # Convert back to original dtype if needed
+
+                # Convert back to original dtype if we used fp16
                 if use_fp16:
                     attn_output = attn_output.float()
-                    
+
             except Exception as e:
+                # If Flash Attention fails, disable it and fall back to SDPA
                 print(f"Flash Attention failed, falling back to SDPA: {e}")
                 FLASH_ATTN_AVAILABLE = False
-                # Fall back to SDPA
+                # Fallback to PyTorch SDPA with proper tensor reshaping
                 attn_output = torch.nn.functional.scaled_dot_product_attention(
-                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                    q.transpose(1, 2),
+                    k.transpose(1, 2),
+                    v.transpose(1, 2),  # Transpose for SDPA format
                     dropout_p=self.dropout if self.training else 0.0,
-                    is_causal=True
-                ).transpose(1, 2)
-        
+                    is_causal=True,
+                ).transpose(
+                    1, 2
+                )  # Transpose back to original format
+
+        # Use PyTorch's Scaled Dot Product Attention (SDPA) as fallback
         if not FLASH_ATTN_AVAILABLE:
-            # Use PyTorch's Scaled Dot Product Attention (SDPA) as fallback
-            # Transpose for SDPA: (batch, num_heads, seq_len, head_dim)
-            q = q.transpose(1, 2)
-            k = k.transpose(1, 2) 
-            v = v.transpose(1, 2)
-            
+            # SDPA expects format: (batch, num_heads, seq_len, head_dim)
+            q = q.transpose(1, 2)  # Swap seq_len and num_heads dimensions
+            k = k.transpose(1, 2)  # Swap seq_len and num_heads dimensions
+            v = v.transpose(1, 2)  # Swap seq_len and num_heads dimensions
+
+            # Compute attention using PyTorch's optimized SDPA
             attn_output = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v,
-                dropout_p=self.dropout if self.training else 0.0,
-                is_causal=True  # Causal mask for autoregressive generation
+                q,
+                k,
+                v,
+                dropout_p=(
+                    self.dropout if self.training else 0.0
+                ),  # Dropout during training only
+                is_causal=True,  # Causal mask prevents looking at future tokens
             )
-            
-            # Transpose back: (batch, seq_len, num_heads, head_dim)
+
+            # Transpose back to expected format: (batch, seq_len, num_heads, head_dim)
             attn_output = attn_output.transpose(1, 2)
 
-        # Reshape and project output
+        # Reshape attention output to combine all heads
         attn_output = attn_output.reshape(batch_size, seq_len, self.d_out)
+        # Apply final linear projection to mix information across heads
         output = self.out_proj(attn_output)
-        
-        # Apply dropout to final output
+
+        # Apply dropout for regularization
         output = self.dropout_layer(output)
-        
+
         return output
 
 
@@ -231,7 +264,7 @@ class TransformerBlock(nn.Module):
         # Shortcut connection for attention block
         shortcut = x
         x = self.norm1(x)
-        x = self.att(x)  # Shape [batch_size, num_tokens, emb_size]  
+        x = self.att(x)  # Shape [batch_size, num_tokens, emb_size]
         x = self.drop_shortcut(x)
         x = x + shortcut  # Add the original input back
 
@@ -311,10 +344,10 @@ def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0
 
         # Apply temperature scaling
         logits = logits / temperature
-        
+
         # Convert to probabilities
         probs = torch.softmax(logits, dim=-1)  # (batch, vocab_size)
-        
+
         # Sample from the probability distribution
         idx_next = torch.multinomial(probs, num_samples=1)  # (batch, 1)
 
@@ -395,7 +428,9 @@ def get_device():
         # Clear cache and set memory fraction
         torch.cuda.empty_cache()
         torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB")
+        print(
+            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB"
+        )
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Apple Metal Performance Shaders (MPS)")
@@ -476,7 +511,19 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
-def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, global_step, accumulation_steps=8, log_interval=25, start_context_param="Who are you?", temperature=0.8):
+def train_epoch(
+    model,
+    train_loader,
+    val_loader,
+    optimizer,
+    device,
+    epoch,
+    global_step,
+    accumulation_steps=8,
+    log_interval=25,
+    start_context_param="Who are you?",
+    temperature=0.8,
+):
     """
     Train model for one epoch with gradient accumulation and periodic validation
     """
@@ -493,7 +540,7 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
         loss = torch.nn.functional.cross_entropy(
             logits.flatten(0, 1), target_batch.flatten()
         )
-        
+
         # Scale loss by accumulation steps for backward pass
         scaled_loss = loss / accumulation_steps
         scaled_loss.backward()
@@ -512,7 +559,7 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
             # Print progress with both train and validation loss every log_interval steps
             if global_step % log_interval == 0:
                 current_train_loss = total_loss / (batch_idx + 1)
-                
+
                 # Quick validation loss calculation
                 model.eval()
                 val_loss = 0.0
@@ -521,21 +568,24 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
                     for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
                         if val_batch_idx >= 5:  # Only use first 5 batches for speed
                             break
-                        val_input, val_target = val_input.to(device), val_target.to(device)
+                        val_input, val_target = val_input.to(device), val_target.to(
+                            device
+                        )
                         val_logits = model(val_input)
                         val_batch_loss = torch.nn.functional.cross_entropy(
                             val_logits.flatten(0, 1), val_target.flatten()
                         )
                         val_loss += val_batch_loss.item()
                         val_samples += 1
-                
-                val_loss = val_loss / val_samples if val_samples > 0 else float('inf')
-                
+
+                val_loss = val_loss / val_samples if val_samples > 0 else float("inf")
+
                 # Generate sample text to show progress
                 import tiktoken
+
                 tokenizer = tiktoken.get_encoding("gpt2")
                 start_context = start_context_param
-                
+
                 try:
                     token_ids = text_to_token_ids(start_context, tokenizer).to(device)
                     with torch.no_grad():
@@ -544,17 +594,19 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
                             idx=token_ids,
                             max_new_tokens=8,
                             context_size=256,  # Use context length from config
-                            temperature=temperature
+                            temperature=temperature,
                         )
                     generated_text = token_ids_to_text(generated_ids, tokenizer)
                     # Extract only the new tokens (remove the original context)
-                    new_tokens = generated_text[len(start_context):].strip()
+                    new_tokens = generated_text[len(start_context) :].strip()
                 except:
                     new_tokens = "[generation failed]"
-                
+
                 model.train()
-                
-                print(f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}")
+
+                print(
+                    f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}"
+                )
 
     return total_loss / num_batches, global_step
 
@@ -585,96 +637,100 @@ def run_inference(args):
     print(f"Model path: {args.model_path}")
     print(f"Temperature: {args.temperature}")
     print(f"Max tokens: {args.max_tokens}")
-    
+
     if not FLASH_ATTN_AVAILABLE:
         print("📦 Flash Attention 2 not available, using PyTorch SDPA fallback")
-    
+
     # Get device
     device = get_device()
-    
+
     # Initialize model
     print("\nInitializing model...")
     model = GPTModel(GPT_CONFIG_124M)
     model = model.to(device)
-    
+
     # Load checkpoint
     if not os.path.exists(args.model_path):
         print(f"❌ Model checkpoint not found: {args.model_path}")
         print("Please train a model first or specify correct --model-path")
         return
-    
+
     loaded_model, _, _, _ = load_checkpoint(args.model_path, model, device=str(device))
     if loaded_model is None:
         print("❌ Failed to load model checkpoint")
         return
-    
+
     model = loaded_model
     model.eval()
-    
+
     # Initialize tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
-    
+
     print(f"\n✅ Model loaded successfully!")
     print("=" * 50)
-    
+
     if args.interactive:
         # Interactive mode
         print("🔄 Interactive mode - Type 'quit' to exit")
         while True:
             try:
                 prompt = input("\n📝 Enter prompt: ").strip()
-                if prompt.lower() in ['quit', 'exit', 'q']:
+                if prompt.lower() in ["quit", "exit", "q"]:
                     print("👋 Goodbye!")
                     break
                 if not prompt:
                     continue
-                
+
                 # Generate text
-                print(f"🤖 Generating (temp={args.temperature}, max_tokens={args.max_tokens})...")
-                
+                print(
+                    f"🤖 Generating (temp={args.temperature}, max_tokens={args.max_tokens})..."
+                )
+
                 token_ids = text_to_token_ids(prompt, tokenizer).to(device)
-                
+
                 with torch.no_grad():
                     generated_ids = generate_text_simple(
                         model=model,
                         idx=token_ids,
                         max_new_tokens=args.max_tokens,
                         context_size=GPT_CONFIG_124M["context_length"],
-                        temperature=args.temperature
+                        temperature=args.temperature,
                     )
-                
+
                 generated_text = token_ids_to_text(generated_ids, tokenizer)
                 print(f"📖 Generated: {generated_text}")
-                
+
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 break
             except Exception as e:
                 print(f"❌ Generation error: {e}")
-    
+
     else:
         # Single prompt mode
         print(f"📝 Input prompt: {args.prompt}")
-        print(f"🤖 Generating (temp={args.temperature}, max_tokens={args.max_tokens})...")
-        
+        print(
+            f"🤖 Generating (temp={args.temperature}, max_tokens={args.max_tokens})..."
+        )
+
         try:
             token_ids = text_to_token_ids(args.prompt, tokenizer).to(device)
-            
+
             with torch.no_grad():
                 generated_ids = generate_text_simple(
                     model=model,
                     idx=token_ids,
                     max_new_tokens=args.max_tokens,
                     context_size=GPT_CONFIG_124M["context_length"],
-                    temperature=args.temperature
+                    temperature=args.temperature,
                 )
-            
+
             generated_text = token_ids_to_text(generated_ids, tokenizer)
             print(f"📖 Generated text:")
             print("-" * 50)
             print(generated_text)
             print("-" * 50)
-            
+
         except Exception as e:
             print(f"❌ Generation error: {e}")
 
@@ -767,7 +823,7 @@ def main():
         default=10,
         help="Stop training if validation loss doesn't improve for N epochs (default: 10)",
     )
-    
+
     # Inference-specific arguments
     parser.add_argument(
         "--model-path",
@@ -803,7 +859,7 @@ def main():
     # Training mode - Calculate gradient accumulation steps
     accumulation_steps = max(1, args.effective_batch_size // args.batch_size)
     effective_batch_size = args.batch_size * accumulation_steps
-    
+
     print("=== GPT Training Script with Flash Attention 2 ===")
     print(f"Epochs: {args.epochs}")
     print(f"Learning rate: {args.lr}")
@@ -815,22 +871,26 @@ def main():
     print(f"Start context: '{args.start_context}'")
     print(f"Log interval: {args.log_interval}")
     print(f"Temperature: {args.temperature}")
-    
+
     if not FLASH_ATTN_AVAILABLE:
         print("\n📦 To install Flash Attention 2:")
         print("   pip install flash-attn --no-build-isolation")
         print("   (Requires CUDA and compatible PyTorch version)")
         print("   Current fallback: PyTorch Scaled Dot Product Attention (SDPA)")
-    
+
     # Warning for high learning rates
     if args.lr > 1e-3:
-        print(f"⚠️  WARNING: Learning rate {args.lr} is quite high! Consider using 5e-4 or lower.")
-    
+        print(
+            f"⚠️  WARNING: Learning rate {args.lr} is quite high! Consider using 5e-4 or lower."
+        )
+
     # Temperature advice
     if args.temperature < 0.1:
         print(f"⚠️  Temperature {args.temperature} is very low - text may be repetitive")
     elif args.temperature > 1.5:
-        print(f"⚠️  Temperature {args.temperature} is very high - text may be incoherent")
+        print(
+            f"⚠️  Temperature {args.temperature} is very high - text may be incoherent"
+        )
 
     # Get device
     device = get_device()
@@ -904,34 +964,48 @@ def main():
     # Training loop with early stopping
     print(f"\nStarting training from epoch {start_epoch}...")
     print("=" * 60)
-    
+
     global_step = 0
     tokenizer = tiktoken.get_encoding("gpt2")
     epochs_without_improvement = 0
 
     for epoch in range(start_epoch, args.epochs):
         # Train
-        train_loss, global_step = train_epoch(model, train_loader, val_loader, optimizer, device, epoch + 1, global_step, accumulation_steps, args.log_interval, args.start_context, args.temperature)
+        train_loss, global_step = train_epoch(
+            model,
+            train_loader,
+            val_loader,
+            optimizer,
+            device,
+            epoch + 1,
+            global_step,
+            accumulation_steps,
+            args.log_interval,
+            args.start_context,
+            args.temperature,
+        )
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
 
         # Print epoch summary in requested format
-        print(f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}")
+        print(
+            f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}"
+        )
 
         # Generate sample text to verify model performance
         model.eval()
         token_ids = text_to_token_ids(args.start_context, tokenizer).to(device)
-        
+
         with torch.no_grad():
             generated_ids = generate_text_simple(
                 model=model,
                 idx=token_ids,
                 max_new_tokens=15,
                 context_size=GPT_CONFIG_124M["context_length"],
-                temperature=args.temperature
+                temperature=args.temperature,
             )
-        
+
         generated_text = token_ids_to_text(generated_ids, tokenizer)
         print(f"End of epoch sample: {generated_text}")
         print("-" * 60)
@@ -947,11 +1021,15 @@ def main():
             )
         else:
             epochs_without_improvement += 1
-            print(f"No improvement for {epochs_without_improvement}/{args.early_stopping_patience} epochs")
-            
+            print(
+                f"No improvement for {epochs_without_improvement}/{args.early_stopping_patience} epochs"
+            )
+
             # Early stopping check
             if epochs_without_improvement >= args.early_stopping_patience:
-                print(f"\n🛑 Early stopping! No improvement for {args.early_stopping_patience} epochs.")
+                print(
+                    f"\n🛑 Early stopping! No improvement for {args.early_stopping_patience} epochs."
+                )
                 print(f"Best validation loss: {best_val_loss:.4f}")
                 break
 
