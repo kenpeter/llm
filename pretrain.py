@@ -429,7 +429,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
-def train_epoch(model, train_loader, optimizer, device):
+def train_epoch(model, train_loader, optimizer, device, epoch, global_step):
     """
     Train model for one epoch
     """
@@ -452,11 +452,13 @@ def train_epoch(model, train_loader, optimizer, device):
         optimizer.step()
 
         total_loss += loss.item()
+        global_step += 1
 
-        if batch_idx % 10 == 0:
-            print(f"  Batch {batch_idx:3d}/{num_batches:3d}, Loss: {loss.item():.4f}")
+        # Print progress every 100 steps instead of every 10 batches
+        if global_step % 100 == 0:
+            print(f"ep {epoch} (step {global_step}): train loss {loss.item():.4f}")
 
-    return total_loss / num_batches
+    return total_loss / num_batches, global_step
 
 
 def evaluate(model, val_loader, device):
@@ -500,7 +502,10 @@ def main():
         help="Learning rate for AdamW optimizer (default: 5e-4)",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=4, help="Batch size for training (default: 4)"
+        "--batch-size",
+        type=int,
+        default=1024,
+        help="Batch size for training (default: 4)",
     )
     parser.add_argument(
         "--save-every",
@@ -588,10 +593,13 @@ def main():
     best_val_loss = float("inf")
 
     if args.resume:
-        model, optimizer, start_epoch, best_val_loss = load_checkpoint(
-            args.resume, model, optimizer, device
+        loaded_model, loaded_optimizer, start_epoch, best_val_loss = load_checkpoint(
+            args.resume, model, optimizer, str(device)
         )
-        if model is None:
+        if loaded_model is not None:
+            model = loaded_model
+            optimizer = loaded_optimizer
+        else:
             print("Failed to load checkpoint. Starting from scratch.")
             start_epoch = 0
             best_val_loss = float("inf")
@@ -599,20 +607,36 @@ def main():
     # Training loop
     print(f"\nStarting training from epoch {start_epoch}...")
     print("=" * 60)
+    
+    global_step = 0
+    tokenizer = tiktoken.get_encoding("gpt2")
 
     for epoch in range(start_epoch, args.epochs):
-        print(f"\nEpoch {epoch + 1}/{args.epochs}")
-        print("-" * 30)
-
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, device)
+        train_loss, global_step = train_epoch(model, train_loader, optimizer, device, epoch + 1, global_step)
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
 
-        print(
-            f"Epoch {epoch + 1:3d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
-        )
+        # Print epoch summary in requested format
+        print(f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}")
+
+        # Generate sample text to verify model performance
+        model.eval()
+        start_context = "Every effort moves"
+        token_ids = text_to_token_ids(start_context, tokenizer).to(device)
+        
+        with torch.no_grad():
+            generated_ids = generate_text_simple(
+                model=model,
+                idx=token_ids,
+                max_new_tokens=10,
+                context_size=GPT_CONFIG_124M["context_length"]
+            )
+        
+        generated_text = token_ids_to_text(generated_ids, tokenizer)
+        print(f"Generated sample: {generated_text}")
+        print("-" * 60)
 
         # Save best model
         if val_loss < best_val_loss:
