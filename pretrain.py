@@ -451,21 +451,24 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
             logits.flatten(0, 1), target_batch.flatten()
         )
         
-        # Scale loss by accumulation steps
-        loss = loss / accumulation_steps
-        loss.backward()
+        # Scale loss by accumulation steps for backward pass
+        scaled_loss = loss / accumulation_steps
+        scaled_loss.backward()
 
-        total_loss += loss.item() * accumulation_steps
+        # Add unscaled loss for correct averaging
+        total_loss += loss.item()
 
         # Update weights every accumulation_steps batches
         if (batch_idx + 1) % accumulation_steps == 0 or batch_idx == num_batches - 1:
+            # Gradient clipping to prevent explosion
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
             global_step += 1
 
             # Print progress with both train and validation loss every log_interval steps
             if global_step % log_interval == 0:
-                current_train_loss = total_loss * accumulation_steps / (batch_idx + 1)
+                current_train_loss = total_loss / (batch_idx + 1)
                 
                 # Quick validation loss calculation
                 model.eval()
@@ -609,6 +612,12 @@ def main():
     print(f"Effective batch size: {effective_batch_size}")
     print(f"Save every: {args.save_every} epochs")
     print(f"Checkpoint dir: {args.checkpoint_dir}")
+    print(f"Start context: '{args.start_context}'")
+    print(f"Log interval: {args.log_interval}")
+    
+    # Warning for high learning rates
+    if args.lr > 1e-3:
+        print(f"⚠️  WARNING: Learning rate {args.lr} is quite high! Consider using 5e-4 or lower.")
 
     # Get device
     device = get_device()
