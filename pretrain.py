@@ -255,7 +255,7 @@ GPT_CONFIG_124M = {
 #####################################
 
 
-def generate_text_simple(model, idx, max_new_tokens, context_size):
+def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0.8):
     # idx is (B, T) array of indices in the current context
     for _ in range(max_new_tokens):
 
@@ -272,11 +272,17 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
         # (batch, n_token, vocab_size) becomes (batch, vocab_size)
         logits = logits[:, -1, :]
 
-        # Get the idx of the vocab entry with the highest logits value
-        idx_next = torch.argmax(logits, dim=-1, keepdim=True)  # (batch, 1)
+        # Apply temperature scaling
+        logits = logits / temperature
+        
+        # Convert to probabilities
+        probs = torch.softmax(logits, dim=-1)  # (batch, vocab_size)
+        
+        # Sample from the probability distribution
+        idx_next = torch.multinomial(probs, num_samples=1)  # (batch, 1)
 
         # Append sampled index to the running sequence
-        idx = torch.cat((idx, idx_next), dim=1)  # (batch, n_tokens+1)
+        idx = torch.cat((idx, idx_next), dim=-1)  # (batch, n_tokens+1)
 
     return idx
 
@@ -433,7 +439,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
-def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, global_step, accumulation_steps=8, log_interval=25, start_context_param="Who are you?"):
+def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, global_step, accumulation_steps=8, log_interval=25, start_context_param="Who are you?", temperature=0.8):
     """
     Train model for one epoch with gradient accumulation and periodic validation
     """
@@ -500,7 +506,8 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
                             model=model,
                             idx=token_ids,
                             max_new_tokens=8,
-                            context_size=256  # Use context length from config
+                            context_size=256,  # Use context length from config
+                            temperature=temperature
                         )
                     generated_text = token_ids_to_text(generated_ids, tokenizer)
                     # Extract only the new tokens (remove the original context)
@@ -597,6 +604,12 @@ def main():
         default="Who are you?",
         help="Start context for text generation during training (default: 'Who are you?')",
     )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.8,
+        help="Temperature for text generation sampling (default: 0.8)",
+    )
 
     args = parser.parse_args()
 
@@ -614,10 +627,17 @@ def main():
     print(f"Checkpoint dir: {args.checkpoint_dir}")
     print(f"Start context: '{args.start_context}'")
     print(f"Log interval: {args.log_interval}")
+    print(f"Temperature: {args.temperature}")
     
     # Warning for high learning rates
     if args.lr > 1e-3:
         print(f"⚠️  WARNING: Learning rate {args.lr} is quite high! Consider using 5e-4 or lower.")
+    
+    # Temperature advice
+    if args.temperature < 0.1:
+        print(f"⚠️  Temperature {args.temperature} is very low - text may be repetitive")
+    elif args.temperature > 1.5:
+        print(f"⚠️  Temperature {args.temperature} is very high - text may be incoherent")
 
     # Get device
     device = get_device()
@@ -697,7 +717,7 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         # Train
-        train_loss, global_step = train_epoch(model, train_loader, val_loader, optimizer, device, epoch + 1, global_step, accumulation_steps, args.log_interval, args.start_context)
+        train_loss, global_step = train_epoch(model, train_loader, val_loader, optimizer, device, epoch + 1, global_step, accumulation_steps, args.log_interval, args.start_context, args.temperature)
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
@@ -714,7 +734,8 @@ def main():
                 model=model,
                 idx=token_ids,
                 max_new_tokens=15,
-                context_size=GPT_CONFIG_124M["context_length"]
+                context_size=GPT_CONFIG_124M["context_length"],
+                temperature=args.temperature
             )
         
         generated_text = token_ids_to_text(generated_ids, tokenizer)
