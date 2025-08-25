@@ -433,9 +433,9 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
-def train_epoch(model, train_loader, optimizer, device, epoch, global_step, accumulation_steps=8):
+def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, global_step, accumulation_steps=8, log_interval=25, start_context_param="Who are you?"):
     """
-    Train model for one epoch with gradient accumulation
+    Train model for one epoch with gradient accumulation and periodic validation
     """
     model.train()
     total_loss = 0.0
@@ -463,9 +463,51 @@ def train_epoch(model, train_loader, optimizer, device, epoch, global_step, accu
             optimizer.zero_grad()
             global_step += 1
 
-            # Print progress every 25 actual steps (since we're accumulating)
-            if global_step % 25 == 0:
-                print(f"ep {epoch} (step {global_step}): train loss {(total_loss * accumulation_steps / (batch_idx + 1)):.4f}")
+            # Print progress with both train and validation loss every log_interval steps
+            if global_step % log_interval == 0:
+                current_train_loss = total_loss * accumulation_steps / (batch_idx + 1)
+                
+                # Quick validation loss calculation
+                model.eval()
+                val_loss = 0.0
+                val_samples = 0
+                with torch.no_grad():
+                    for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
+                        if val_batch_idx >= 5:  # Only use first 5 batches for speed
+                            break
+                        val_input, val_target = val_input.to(device), val_target.to(device)
+                        val_logits = model(val_input)
+                        val_batch_loss = torch.nn.functional.cross_entropy(
+                            val_logits.flatten(0, 1), val_target.flatten()
+                        )
+                        val_loss += val_batch_loss.item()
+                        val_samples += 1
+                
+                val_loss = val_loss / val_samples if val_samples > 0 else float('inf')
+                
+                # Generate sample text to show progress
+                import tiktoken
+                tokenizer = tiktoken.get_encoding("gpt2")
+                start_context = start_context_param
+                
+                try:
+                    token_ids = text_to_token_ids(start_context, tokenizer).to(device)
+                    with torch.no_grad():
+                        generated_ids = generate_text_simple(
+                            model=model,
+                            idx=token_ids,
+                            max_new_tokens=8,
+                            context_size=256  # Use context length from config
+                        )
+                    generated_text = token_ids_to_text(generated_ids, tokenizer)
+                    # Extract only the new tokens (remove the original context)
+                    new_tokens = generated_text[len(start_context):].strip()
+                except:
+                    new_tokens = "[generation failed]"
+                
+                model.train()
+                
+                print(f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}")
 
     return total_loss / num_batches, global_step
 
@@ -539,6 +581,18 @@ def main():
         type=str,
         default="the-verdict.txt",
         help="Text file to train on (default: the-verdict.txt)",
+    )
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=25,
+        help="Log train/val loss every N steps (default: 25)",
+    )
+    parser.add_argument(
+        "--start-context",
+        type=str,
+        default="Who are you?",
+        help="Start context for text generation during training (default: 'Who are you?')",
     )
 
     args = parser.parse_args()
@@ -634,7 +688,7 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         # Train
-        train_loss, global_step = train_epoch(model, train_loader, optimizer, device, epoch + 1, global_step, accumulation_steps)
+        train_loss, global_step = train_epoch(model, train_loader, val_loader, optimizer, device, epoch + 1, global_step, accumulation_steps, args.log_interval, args.start_context)
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
@@ -644,19 +698,18 @@ def main():
 
         # Generate sample text to verify model performance
         model.eval()
-        start_context = "Every effort moves"
-        token_ids = text_to_token_ids(start_context, tokenizer).to(device)
+        token_ids = text_to_token_ids(args.start_context, tokenizer).to(device)
         
         with torch.no_grad():
             generated_ids = generate_text_simple(
                 model=model,
                 idx=token_ids,
-                max_new_tokens=10,
+                max_new_tokens=15,
                 context_size=GPT_CONFIG_124M["context_length"]
             )
         
         generated_text = token_ids_to_text(generated_ids, tokenizer)
-        print(f"Generated sample: {generated_text}")
+        print(f"End of epoch sample: {generated_text}")
         print("-" * 60)
 
         # Save best model
