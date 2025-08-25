@@ -315,7 +315,7 @@ GPT_CONFIG_124M = {
     "emb_dim": 768,  # Embedding dimension
     "n_heads": 12,  # Number of attention heads
     "n_layers": 12,  # Number of layers
-    "drop_rate": 0.3,  # Increased dropout rate to combat overfitting
+    "drop_rate": 0.5,  # Very high dropout to combat severe overfitting
     "qkv_bias": False,  # Query-key-value bias
 }
 
@@ -761,7 +761,13 @@ def main():
         "--epochs",
         type=int,
         default=100,
-        help="Number of training epochs (default: 10)",
+        help="Total number of training epochs (default: 100)",
+    )
+    parser.add_argument(
+        "--additional-epochs",
+        type=int,
+        default=None,
+        help="Additional epochs to train beyond current checkpoint (overrides --epochs when resuming)",
     )
     parser.add_argument(
         "--lr",
@@ -861,7 +867,10 @@ def main():
     effective_batch_size = args.batch_size * accumulation_steps
 
     print("=== GPT Training Script with Flash Attention 2 ===")
-    print(f"Epochs: {args.epochs}")
+    if args.additional_epochs is not None and args.resume:
+        print(f"Additional epochs: +{args.additional_epochs}")
+    else:
+        print(f"Target epochs: {args.epochs}")
     print(f"Learning rate: {args.lr}")
     print(f"Micro batch size: {args.batch_size}")
     print(f"Gradient accumulation steps: {accumulation_steps}")
@@ -956,10 +965,21 @@ def main():
         if loaded_model is not None:
             model = loaded_model
             optimizer = loaded_optimizer
+            
+            # Handle additional epochs parameter
+            if args.additional_epochs is not None:
+                target_epochs = start_epoch + args.additional_epochs
+                print(f"📈 Training {args.additional_epochs} additional epochs: {start_epoch} → {target_epochs}")
+            else:
+                target_epochs = args.epochs
+                print(f"📈 Training until epoch {target_epochs} (current: {start_epoch})")
         else:
             print("Failed to load checkpoint. Starting from scratch.")
             start_epoch = 0
             best_val_loss = float("inf")
+            target_epochs = args.epochs
+    else:
+        target_epochs = args.epochs
 
     # Training loop with early stopping
     print(f"\nStarting training from epoch {start_epoch}...")
@@ -969,7 +989,7 @@ def main():
     tokenizer = tiktoken.get_encoding("gpt2")
     epochs_without_improvement = 0
 
-    for epoch in range(start_epoch, args.epochs):
+    for epoch in range(start_epoch, target_epochs):
         # Train
         train_loss, global_step = train_epoch(
             model,
@@ -1045,7 +1065,7 @@ def main():
 
     # Save final model
     final_checkpoint = save_checkpoint(
-        model, optimizer, args.epochs - 1, best_val_loss, args.lr, args.checkpoint_dir
+        model, optimizer, target_epochs - 1, best_val_loss, args.lr, args.checkpoint_dir
     )
     print(f"Final model saved to: {final_checkpoint}")
 
