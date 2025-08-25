@@ -429,34 +429,39 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
-def train_epoch(model, train_loader, optimizer, device, epoch, global_step):
+def train_epoch(model, train_loader, optimizer, device, epoch, global_step, accumulation_steps=8):
     """
-    Train model for one epoch
+    Train model for one epoch with gradient accumulation
     """
     model.train()
     total_loss = 0.0
     num_batches = len(train_loader)
+    optimizer.zero_grad()
 
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
         input_batch = input_batch.to(device)
         target_batch = target_batch.to(device)
 
-        optimizer.zero_grad()
-
         logits = model(input_batch)
         loss = torch.nn.functional.cross_entropy(
             logits.flatten(0, 1), target_batch.flatten()
         )
-
+        
+        # Scale loss by accumulation steps
+        loss = loss / accumulation_steps
         loss.backward()
-        optimizer.step()
 
-        total_loss += loss.item()
-        global_step += 1
+        total_loss += loss.item() * accumulation_steps
 
-        # Print progress every 100 steps instead of every 10 batches
-        if global_step % 100 == 0:
-            print(f"ep {epoch} (step {global_step}): train loss {loss.item():.4f}")
+        # Update weights every accumulation_steps batches
+        if (batch_idx + 1) % accumulation_steps == 0 or batch_idx == num_batches - 1:
+            optimizer.step()
+            optimizer.zero_grad()
+            global_step += 1
+
+            # Print progress every 25 actual steps (since we're accumulating)
+            if global_step % 25 == 0:
+                print(f"ep {epoch} (step {global_step}): train loss {(total_loss * accumulation_steps / (batch_idx + 1)):.4f}")
 
     return total_loss / num_batches, global_step
 
