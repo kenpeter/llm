@@ -14,6 +14,7 @@ import urllib.request
 # Dataset and DataLoader
 #####################################
 
+
 class GPTDatasetV1(Dataset):
     def __init__(self, txt, tokenizer, max_length, stride):
         self.input_ids = []
@@ -24,8 +25,8 @@ class GPTDatasetV1(Dataset):
 
         # Use a sliding window to chunk the book into overlapping sequences of max_length
         for i in range(0, len(token_ids) - max_length, stride):
-            input_chunk = token_ids[i:i + max_length]
-            target_chunk = token_ids[i + 1: i + max_length + 1]
+            input_chunk = token_ids[i : i + max_length]
+            target_chunk = token_ids[i + 1 : i + max_length + 1]
             self.input_ids.append(torch.tensor(input_chunk))
             self.target_ids.append(torch.tensor(target_chunk))
 
@@ -36,8 +37,15 @@ class GPTDatasetV1(Dataset):
         return self.input_ids[idx], self.target_ids[idx]
 
 
-def create_dataloader_v1(txt, batch_size=4, max_length=256,
-                         stride=128, shuffle=True, drop_last=True, num_workers=0):
+def create_dataloader_v1(
+    txt,
+    batch_size=4,
+    max_length=256,
+    stride=128,
+    shuffle=True,
+    drop_last=True,
+    num_workers=0,
+):
     # Initialize the tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
 
@@ -46,7 +54,12 @@ def create_dataloader_v1(txt, batch_size=4, max_length=256,
 
     # Create dataloader
     dataloader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last, num_workers=num_workers)
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        num_workers=num_workers,
+    )
 
     return dataloader
 
@@ -55,6 +68,7 @@ def create_dataloader_v1(txt, batch_size=4, max_length=256,
 # Model Components
 #####################################
 
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
         super().__init__()
@@ -62,14 +76,18 @@ class MultiHeadAttention(nn.Module):
 
         self.d_out = d_out
         self.num_heads = num_heads
-        self.head_dim = d_out // num_heads  # Reduce the projection dim to match desired output dim
+        self.head_dim = (
+            d_out // num_heads
+        )  # Reduce the projection dim to match desired output dim
 
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.out_proj = nn.Linear(d_out, d_out)  # Linear layer to combine head outputs
         self.dropout = nn.Dropout(dropout)
-        self.register_buffer('mask', torch.triu(torch.ones(context_length, context_length), diagonal=1))
+        self.register_buffer(
+            "mask", torch.triu(torch.ones(context_length, context_length), diagonal=1)
+        )
 
     def forward(self, x):
         b, num_tokens, d_in = x.shape
@@ -98,7 +116,7 @@ class MultiHeadAttention(nn.Module):
         # Use the mask to fill attention scores
         attn_scores.masked_fill_(mask_bool, -torch.inf)
 
-        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1] ** 0.5, dim=-1)
         attn_weights = self.dropout(attn_weights)
 
         # Shape: (b, num_tokens, num_heads, head_dim)
@@ -130,10 +148,17 @@ class GELU(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        return 0.5 * x * (1 + torch.tanh(
-            torch.sqrt(torch.tensor(2.0 / torch.pi)) *
-            (x + 0.044715 * torch.pow(x, 3))
-        ))
+        return (
+            0.5
+            * x
+            * (
+                1
+                + torch.tanh(
+                    torch.sqrt(torch.tensor(2.0 / torch.pi))
+                    * (x + 0.044715 * torch.pow(x, 3))
+                )
+            )
+        )
 
 
 class FeedForward(nn.Module):
@@ -158,7 +183,8 @@ class TransformerBlock(nn.Module):
             context_length=cfg["context_length"],
             num_heads=cfg["n_heads"],
             dropout=cfg["drop_rate"],
-            qkv_bias=cfg["qkv_bias"])
+            qkv_bias=cfg["qkv_bias"],
+        )
         self.ff = FeedForward(cfg)
         self.norm1 = LayerNorm(cfg["emb_dim"])
         self.norm2 = LayerNorm(cfg["emb_dim"])
@@ -168,7 +194,7 @@ class TransformerBlock(nn.Module):
         # Shortcut connection for attention block
         shortcut = x
         x = self.norm1(x)
-        x = self.att(x)   # Shape [batch_size, num_tokens, emb_size]
+        x = self.att(x)  # Shape [batch_size, num_tokens, emb_size]
         x = self.drop_shortcut(x)
         x = x + shortcut  # Add the original input back
 
@@ -190,7 +216,8 @@ class GPTModel(nn.Module):
         self.drop_emb = nn.Dropout(cfg["drop_rate"])
 
         self.trf_blocks = nn.Sequential(
-            *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
+            *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
+        )
 
         self.final_norm = LayerNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
@@ -199,7 +226,7 @@ class GPTModel(nn.Module):
         batch_size, seq_len = in_idx.shape
         tok_embeds = self.tok_emb(in_idx)
         pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
-        x = tok_embeds + pos_embeds  
+        x = tok_embeds + pos_embeds
         x = self.drop_emb(x)
         x = self.trf_blocks(x)
         x = self.final_norm(x)
@@ -213,19 +240,20 @@ class GPTModel(nn.Module):
 #####################################
 
 GPT_CONFIG_124M = {
-    "vocab_size": 50257,   # Vocabulary size
-    "context_length": 256, # Shortened context length (orig: 1024)
-    "emb_dim": 768,        # Embedding dimension
-    "n_heads": 12,         # Number of attention heads
-    "n_layers": 12,        # Number of layers
-    "drop_rate": 0.1,      # Dropout rate
-    "qkv_bias": False      # Query-key-value bias
+    "vocab_size": 50257,  # Vocabulary size
+    "context_length": 256,  # Shortened context length (orig: 1024)
+    "emb_dim": 768,  # Embedding dimension
+    "n_heads": 12,  # Number of attention heads
+    "n_layers": 12,  # Number of layers
+    "drop_rate": 0.1,  # Dropout rate
+    "qkv_bias": False,  # Query-key-value bias
 }
 
 
 #####################################
 # Utility Functions
 #####################################
+
 
 def generate_text_simple(model, idx, max_new_tokens, context_size):
     # idx is (B, T) array of indices in the current context
@@ -254,12 +282,13 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
 
 
 def text_to_token_ids(text, tokenizer):
-    encoded = tokenizer.encode(text, allowed_special={'<|endoftext|>'})
-    encoded_tensor = torch.tensor(encoded).unsqueeze(0) # add batch dimension
+    encoded = tokenizer.encode(text, allowed_special={"<|endoftext|>"})
+    encoded_tensor = torch.tensor(encoded).unsqueeze(0)  # add batch dimension
     return encoded_tensor
 
+
 def token_ids_to_text(token_ids, tokenizer):
-    flat = token_ids.squeeze(0) # remove batch dimension
+    flat = token_ids.squeeze(0)  # remove batch dimension
     return tokenizer.decode(flat.tolist())
 
 
@@ -272,14 +301,16 @@ def calc_loss_batch(input_batch, target_batch, model, device):
     # 2. logit: [1_b, 3_token_n, 50257_vocab_size] -> flat(0, 1) -> [3_token_n, 50257_vocab_size]
     # 3. target: [1_b, 3_token_n] -> flat_all -> [3_token_n]
     # 4. cross entropy has internal loop -> loop logit match target
-    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten())
+    loss = torch.nn.functional.cross_entropy(
+        logits.flatten(0, 1), target_batch.flatten()
+    )
     # return loss
     return loss
 
 
 def calc_loss_loader(data_loader, model, device, num_batches=None):
     # total loss
-    total_loss = 0.
+    total_loss = 0.0
     # data loader empty
     if len(data_loader) == 0:
         return float("nan")
@@ -310,6 +341,7 @@ def calc_loss_loader(data_loader, model, device, num_batches=None):
 # Training Infrastructure
 #####################################
 
+
 def get_device():
     """
     Detect and return the best available device (CUDA, MPS, or CPU)
@@ -334,13 +366,13 @@ def load_text_data(file_path="the-verdict.txt"):
         print(f"Downloading {file_path}...")
         url = "https://raw.githubusercontent.com/rasbt/LLMs-from-scratch/main/ch02/01_main-chapter-code/the-verdict.txt"
         with urllib.request.urlopen(url) as response:
-            text_data = response.read().decode('utf-8')
+            text_data = response.read().decode("utf-8")
         with open(file_path, "w", encoding="utf-8") as file:
             file.write(text_data)
     else:
         with open(file_path, "r", encoding="utf-8") as file:
             text_data = file.read()
-    
+
     return text_data
 
 
@@ -349,48 +381,50 @@ def save_checkpoint(model, optimizer, epoch, loss, lr, checkpoint_dir="checkpoin
     Save model checkpoint including model state, optimizer state, and training info
     """
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
     checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss,
-        'lr': lr,
-        'config': GPT_CONFIG_124M,
-        'timestamp': datetime.now().isoformat()
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "lr": lr,
+        "config": GPT_CONFIG_124M,
+        "timestamp": datetime.now().isoformat(),
     }
-    
+
     # Save latest checkpoint
-    checkpoint_path = os.path.join(checkpoint_dir, 'latest_checkpoint.pt')
+    checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint.pt")
     torch.save(checkpoint, checkpoint_path)
-    
+
     # Save epoch-specific checkpoint
-    epoch_checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch:04d}.pt')
+    epoch_checkpoint_path = os.path.join(
+        checkpoint_dir, f"checkpoint_epoch_{epoch:04d}.pt"
+    )
     torch.save(checkpoint, epoch_checkpoint_path)
-    
+
     print(f"Checkpoint saved: {checkpoint_path}")
     return checkpoint_path
 
 
-def load_checkpoint(checkpoint_path, model, optimizer=None, device='cpu'):
+def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     """
     Load model checkpoint and resume training state
     """
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")
-        return None, None, 0, float('inf')
-    
+        return None, None, 0, float("inf")
+
     print(f"Loading checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    
-    model.load_state_dict(checkpoint['model_state_dict'])
-    
-    start_epoch = checkpoint['epoch'] + 1
-    best_loss = checkpoint['loss']
-    
-    if optimizer is not None and 'optimizer_state_dict' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    start_epoch = checkpoint["epoch"] + 1
+    best_loss = checkpoint["loss"]
+
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
     print(f"Resumed from epoch {checkpoint['epoch']}, loss: {best_loss:.4f}")
     return model, optimizer, start_epoch, best_loss
 
@@ -402,27 +436,26 @@ def train_epoch(model, train_loader, optimizer, device):
     model.train()
     total_loss = 0.0
     num_batches = len(train_loader)
-    
+
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
         input_batch = input_batch.to(device)
         target_batch = target_batch.to(device)
-        
+
         optimizer.zero_grad()
-        
+
         logits = model(input_batch)
         loss = torch.nn.functional.cross_entropy(
-            logits.flatten(0, 1), 
-            target_batch.flatten()
+            logits.flatten(0, 1), target_batch.flatten()
         )
-        
+
         loss.backward()
         optimizer.step()
-        
+
         total_loss += loss.item()
-        
+
         if batch_idx % 10 == 0:
             print(f"  Batch {batch_idx:3d}/{num_batches:3d}, Loss: {loss.item():.4f}")
-    
+
     return total_loss / num_batches
 
 
@@ -432,10 +465,10 @@ def evaluate(model, val_loader, device):
     """
     model.eval()
     total_loss = 0.0
-    
+
     with torch.no_grad():
         total_loss = calc_loss_loader(val_loader, model, device)
-    
+
     return total_loss
 
 
@@ -443,50 +476,78 @@ def evaluate(model, val_loader, device):
 # Main Training Function
 #####################################
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Train GPT model with resumable training')
-    parser.add_argument('--resume', type=str, default=None,
-                       help='Path to checkpoint file to resume training from')
-    parser.add_argument('--epochs', type=int, default=10,
-                       help='Number of training epochs (default: 10)')
-    parser.add_argument('--lr', type=float, default=5e-4,
-                       help='Learning rate for AdamW optimizer (default: 5e-4)')
-    parser.add_argument('--batch-size', type=int, default=4,
-                       help='Batch size for training (default: 4)')
-    parser.add_argument('--save-every', type=int, default=5,
-                       help='Save checkpoint every N epochs (default: 5)')
-    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
-                       help='Directory to save checkpoints (default: checkpoints)')
-    parser.add_argument('--data-file', type=str, default='the-verdict.txt',
-                       help='Text file to train on (default: the-verdict.txt)')
-    
+    parser = argparse.ArgumentParser(
+        description="Train GPT model with resumable training"
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint file to resume training from",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=100,
+        help="Number of training epochs (default: 10)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=5e-5,
+        help="Learning rate for AdamW optimizer (default: 5e-4)",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=4, help="Batch size for training (default: 4)"
+    )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=20,
+        help="Save checkpoint every N epochs (default: 5)",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints",
+        help="Directory to save checkpoints (default: checkpoints)",
+    )
+    parser.add_argument(
+        "--data-file",
+        type=str,
+        default="the-verdict.txt",
+        help="Text file to train on (default: the-verdict.txt)",
+    )
+
     args = parser.parse_args()
-    
+
     print("=== GPT Training Script ===")
     print(f"Epochs: {args.epochs}")
     print(f"Learning rate: {args.lr}")
     print(f"Batch size: {args.batch_size}")
     print(f"Save every: {args.save_every} epochs")
     print(f"Checkpoint dir: {args.checkpoint_dir}")
-    
+
     # Get device
     device = get_device()
-    
+
     # Load text data
     print("\nLoading text data...")
     text_data = load_text_data(args.data_file)
     print(f"Loaded {len(text_data):,} characters")
-    
+
     # Split data
     train_ratio = 0.90
     split_idx = int(train_ratio * len(text_data))
     train_data = text_data[:split_idx]
     val_data = text_data[split_idx:]
-    
+
     # Create data loaders
     print("Creating data loaders...")
     torch.manual_seed(123)
-    
+
     train_loader = create_dataloader_v1(
         train_data,
         batch_size=args.batch_size,
@@ -494,9 +555,9 @@ def main():
         stride=GPT_CONFIG_124M["context_length"],
         drop_last=True,
         shuffle=True,
-        num_workers=0
+        num_workers=0,
     )
-    
+
     val_loader = create_dataloader_v1(
         val_data,
         batch_size=args.batch_size,
@@ -504,28 +565,28 @@ def main():
         stride=GPT_CONFIG_124M["context_length"],
         drop_last=False,
         shuffle=False,
-        num_workers=0
+        num_workers=0,
     )
-    
+
     print(f"Training batches: {len(train_loader)}")
     print(f"Validation batches: {len(val_loader)}")
-    
+
     # Initialize model
     print("\nInitializing model...")
     torch.manual_seed(123)
     model = GPTModel(GPT_CONFIG_124M)
     model = model.to(device)
-    
+
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
-    
+
     # Initialize optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1)
-    
+
     # Load checkpoint if resuming
     start_epoch = 0
-    best_val_loss = float('inf')
-    
+    best_val_loss = float("inf")
+
     if args.resume:
         model, optimizer, start_epoch, best_val_loss = load_checkpoint(
             args.resume, model, optimizer, device
@@ -533,39 +594,41 @@ def main():
         if model is None:
             print("Failed to load checkpoint. Starting from scratch.")
             start_epoch = 0
-            best_val_loss = float('inf')
-    
+            best_val_loss = float("inf")
+
     # Training loop
     print(f"\nStarting training from epoch {start_epoch}...")
     print("=" * 60)
-    
+
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch + 1}/{args.epochs}")
         print("-" * 30)
-        
+
         # Train
         train_loss = train_epoch(model, train_loader, optimizer, device)
-        
+
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
-        
-        print(f"Epoch {epoch + 1:3d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        
+
+        print(
+            f"Epoch {epoch + 1:3d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
+        )
+
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             print(f"New best validation loss: {best_val_loss:.4f}")
-        
+
         # Save checkpoint periodically
         if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:
             save_checkpoint(
                 model, optimizer, epoch, val_loss, args.lr, args.checkpoint_dir
             )
-    
+
     print("\n" + "=" * 60)
     print("Training completed!")
     print(f"Best validation loss: {best_val_loss:.4f}")
-    
+
     # Save final model
     final_checkpoint = save_checkpoint(
         model, optimizer, args.epochs - 1, best_val_loss, args.lr, args.checkpoint_dir
