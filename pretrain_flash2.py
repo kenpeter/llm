@@ -573,13 +573,127 @@ def evaluate(model, val_loader, device):
 
 
 #####################################
+# Inference Function
+#####################################
+
+
+def run_inference(args):
+    """
+    Run text generation inference with trained model
+    """
+    print("=== GPT Inference with Flash Attention 2 ===")
+    print(f"Model path: {args.model_path}")
+    print(f"Temperature: {args.temperature}")
+    print(f"Max tokens: {args.max_tokens}")
+    
+    if not FLASH_ATTN_AVAILABLE:
+        print("📦 Flash Attention 2 not available, using PyTorch SDPA fallback")
+    
+    # Get device
+    device = get_device()
+    
+    # Initialize model
+    print("\nInitializing model...")
+    model = GPTModel(GPT_CONFIG_124M)
+    model = model.to(device)
+    
+    # Load checkpoint
+    if not os.path.exists(args.model_path):
+        print(f"❌ Model checkpoint not found: {args.model_path}")
+        print("Please train a model first or specify correct --model-path")
+        return
+    
+    loaded_model, _, _, _ = load_checkpoint(args.model_path, model, device=str(device))
+    if loaded_model is None:
+        print("❌ Failed to load model checkpoint")
+        return
+    
+    model = loaded_model
+    model.eval()
+    
+    # Initialize tokenizer
+    tokenizer = tiktoken.get_encoding("gpt2")
+    
+    print(f"\n✅ Model loaded successfully!")
+    print("=" * 50)
+    
+    if args.interactive:
+        # Interactive mode
+        print("🔄 Interactive mode - Type 'quit' to exit")
+        while True:
+            try:
+                prompt = input("\n📝 Enter prompt: ").strip()
+                if prompt.lower() in ['quit', 'exit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                if not prompt:
+                    continue
+                
+                # Generate text
+                print(f"🤖 Generating (temp={args.temperature}, max_tokens={args.max_tokens})...")
+                
+                token_ids = text_to_token_ids(prompt, tokenizer).to(device)
+                
+                with torch.no_grad():
+                    generated_ids = generate_text_simple(
+                        model=model,
+                        idx=token_ids,
+                        max_new_tokens=args.max_tokens,
+                        context_size=GPT_CONFIG_124M["context_length"],
+                        temperature=args.temperature
+                    )
+                
+                generated_text = token_ids_to_text(generated_ids, tokenizer)
+                print(f"📖 Generated: {generated_text}")
+                
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"❌ Generation error: {e}")
+    
+    else:
+        # Single prompt mode
+        print(f"📝 Input prompt: {args.prompt}")
+        print(f"🤖 Generating (temp={args.temperature}, max_tokens={args.max_tokens})...")
+        
+        try:
+            token_ids = text_to_token_ids(args.prompt, tokenizer).to(device)
+            
+            with torch.no_grad():
+                generated_ids = generate_text_simple(
+                    model=model,
+                    idx=token_ids,
+                    max_new_tokens=args.max_tokens,
+                    context_size=GPT_CONFIG_124M["context_length"],
+                    temperature=args.temperature
+                )
+            
+            generated_text = token_ids_to_text(generated_ids, tokenizer)
+            print(f"📖 Generated text:")
+            print("-" * 50)
+            print(generated_text)
+            print("-" * 50)
+            
+        except Exception as e:
+            print(f"❌ Generation error: {e}")
+
+
+#####################################
 # Main Training Function
 #####################################
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train GPT model with resumable training"
+        description="Train or run inference with GPT model using Flash Attention 2"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["train", "inference"],
+        default="train",
+        help="Mode: 'train' for training, 'inference' for text generation (default: train)",
     )
     parser.add_argument(
         "--resume",
@@ -653,10 +767,40 @@ def main():
         default=10,
         help="Stop training if validation loss doesn't improve for N epochs (default: 10)",
     )
+    
+    # Inference-specific arguments
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default="checkpoints/latest_checkpoint.pt",
+        help="Path to trained model checkpoint for inference (default: checkpoints/latest_checkpoint.pt)",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="Who are you?",
+        help="Input prompt for text generation (default: 'Who are you?')",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=50,
+        help="Maximum number of tokens to generate (default: 50)",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode for continuous text generation",
+    )
 
     args = parser.parse_args()
 
-    # Calculate gradient accumulation steps
+    # Route to appropriate function based on mode
+    if args.mode == "inference":
+        run_inference(args)
+        return
+
+    # Training mode - Calculate gradient accumulation steps
     accumulation_steps = max(1, args.effective_batch_size // args.batch_size)
     effective_batch_size = args.batch_size * accumulation_steps
     
