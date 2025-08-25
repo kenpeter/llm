@@ -349,6 +349,10 @@ def get_device():
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"Using CUDA device: {torch.cuda.get_device_name()}")
+        # Clear cache and set memory fraction
+        torch.cuda.empty_cache()
+        torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB")
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Apple Metal Performance Shaders (MPS)")
@@ -509,8 +513,14 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1024,
-        help="Batch size for training (default: 4)",
+        default=2,
+        help="Micro batch size for training (default: 2)",
+    )
+    parser.add_argument(
+        "--effective-batch-size",
+        type=int,
+        default=32,
+        help="Effective batch size via gradient accumulation (default: 32)",
     )
     parser.add_argument(
         "--save-every",
@@ -533,10 +543,16 @@ def main():
 
     args = parser.parse_args()
 
+    # Calculate gradient accumulation steps
+    accumulation_steps = max(1, args.effective_batch_size // args.batch_size)
+    effective_batch_size = args.batch_size * accumulation_steps
+    
     print("=== GPT Training Script ===")
     print(f"Epochs: {args.epochs}")
     print(f"Learning rate: {args.lr}")
-    print(f"Batch size: {args.batch_size}")
+    print(f"Micro batch size: {args.batch_size}")
+    print(f"Gradient accumulation steps: {accumulation_steps}")
+    print(f"Effective batch size: {effective_batch_size}")
     print(f"Save every: {args.save_every} epochs")
     print(f"Checkpoint dir: {args.checkpoint_dir}")
 
@@ -618,7 +634,7 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         # Train
-        train_loss, global_step = train_epoch(model, train_loader, optimizer, device, epoch + 1, global_step)
+        train_loss, global_step = train_epoch(model, train_loader, optimizer, device, epoch + 1, global_step, accumulation_steps)
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
