@@ -15,13 +15,16 @@ from datasets import load_dataset
 #####################################
 
 
+# text to token id OR token id to text
 class GPTDatasetV1(Dataset):
     def __init__(self, txt, tokenizer, max_length, stride):
         self.input_ids = []
         self.target_ids = []
 
         # Tokenize the entire text
-        token_ids = tokenizer.encode(txt, allowed_special={"<|endoftext|>"}, disallowed_special=())
+        token_ids = tokenizer.encode(
+            txt, allowed_special={"<|endoftext|>"}, disallowed_special=()
+        )
 
         # Use a sliding window to chunk the book into overlapping sequences of max_length
         for i in range(0, len(token_ids) - max_length, stride):
@@ -37,41 +40,39 @@ class GPTDatasetV1(Dataset):
         return self.input_ids[idx], self.target_ids[idx]
 
 
+# open web text dataset
 class OpenWebTextDataset(IterableDataset):
     """Streaming dataset for large-scale web text data (FineWeb, C4, RedPajama)"""
-    
+
+    # init
+    # self, tokenizer, max_len, stride, buffer size 1000
     def __init__(self, tokenizer, max_length, stride=None, buffer_size=1000):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.stride = stride if stride is not None else max_length
         self.buffer_size = buffer_size
-        
+
         # Load the streaming dataset - try multiple large-scale web datasets
         print("Loading large-scale web text dataset...")
         dataset_loaded = False
-        
+
         # Try different datasets in order of preference
         datasets_to_try = [
             ("HuggingFaceFW/fineweb", "train", None),  # FineWeb
             ("allenai/c4", "train", "en"),  # C4 English
             ("EleutherAI/pile", "train", None),  # The Pile
         ]
-        
+
         for dataset_name, split_name, config_name in datasets_to_try:
             try:
                 print(f"Trying {dataset_name} dataset...")
                 if config_name:
                     self.dataset = load_dataset(
-                        dataset_name,
-                        config_name,
-                        split=split_name,
-                        streaming=True
+                        dataset_name, config_name, split=split_name, streaming=True
                     )
                 else:
                     self.dataset = load_dataset(
-                        dataset_name,
-                        split=split_name,
-                        streaming=True
+                        dataset_name, split=split_name, streaming=True
                     )
                 print(f"✅ Successfully loaded {dataset_name}")
                 dataset_loaded = True
@@ -79,19 +80,19 @@ class OpenWebTextDataset(IterableDataset):
             except Exception as e:
                 print(f"Failed to load {dataset_name}: {e}")
                 continue
-        
+
         if not dataset_loaded:
             raise RuntimeError("Failed to load any large-scale web text dataset")
-        
+
         print("✅ Large-scale web text streaming dataset loaded successfully")
 
     def __iter__(self):
         # Buffer to accumulate tokens across documents
         token_buffer = []
-        
+
         # Common text field names in different datasets
         text_fields = ["text", "content", "raw_content"]
-        
+
         for example in self.dataset:
             # Find the text field
             text = None
@@ -99,43 +100,49 @@ class OpenWebTextDataset(IterableDataset):
                 if field in example:
                     text = example[field]
                     break
-            
+
             if text is None:
-                print(f"Warning: No text field found in example: {list(example.keys())}")
+                print(
+                    f"Warning: No text field found in example: {list(example.keys())}"
+                )
                 continue
-                
+
             # Skip empty texts
             if not text or len(text.strip()) == 0:
                 continue
-            
+
             try:
                 # Tokenize the text - allow endoftext tokens and disable disallowed special tokens
                 tokens = self.tokenizer.encode(
-                    text, 
-                    allowed_special={"<|endoftext|>"}, 
-                    disallowed_special=()
+                    text, allowed_special={"<|endoftext|>"}, disallowed_special=()
                 )
-                
+
                 # Add end of text token between documents
-                tokens.append(self.tokenizer.encode("<|endoftext|>", allowed_special={"<|endoftext|>"}, disallowed_special=())[0])
-                
+                tokens.append(
+                    self.tokenizer.encode(
+                        "<|endoftext|>",
+                        allowed_special={"<|endoftext|>"},
+                        disallowed_special=(),
+                    )[0]
+                )
+
                 # Add to buffer
                 token_buffer.extend(tokens)
-                
+
                 # Yield sequences when buffer is large enough
                 while len(token_buffer) >= self.max_length + 1:
                     # Create input and target sequences
-                    input_chunk = token_buffer[:self.max_length]
-                    target_chunk = token_buffer[1:self.max_length + 1]
-                    
+                    input_chunk = token_buffer[: self.max_length]
+                    target_chunk = token_buffer[1 : self.max_length + 1]
+
                     yield torch.tensor(input_chunk), torch.tensor(target_chunk)
-                    
+
                     # Move buffer forward by stride
-                    token_buffer = token_buffer[self.stride:]
-                    
+                    token_buffer = token_buffer[self.stride :]
+
             except Exception as e:
                 # Reduce verbosity - only print first few errors
-                if not hasattr(self, '_error_count'):
+                if not hasattr(self, "_error_count"):
                     self._error_count = 0
                 if self._error_count < 3:
                     print(f"Warning: Error processing text sample: {e}")
@@ -189,7 +196,7 @@ def create_openwebtext_dataloader(
         tokenizer=tokenizer,
         max_length=max_length,
         stride=stride,
-        buffer_size=buffer_size
+        buffer_size=buffer_size,
     )
 
     # Create dataloader for streaming dataset
@@ -496,7 +503,9 @@ def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0
 
 
 def text_to_token_ids(text, tokenizer):
-    encoded = tokenizer.encode(text, allowed_special={"<|endoftext|>"}, disallowed_special=())
+    encoded = tokenizer.encode(
+        text, allowed_special={"<|endoftext|>"}, disallowed_special=()
+    )
     encoded_tensor = torch.tensor(encoded).unsqueeze(0)  # add batch dimension
     return encoded_tensor
 
@@ -584,30 +593,32 @@ def load_openwebtext_streaming():
     """
     print("🔄 Initializing large-scale web text streaming dataset...")
     print("This will download data on-demand during training.")
-    
+
     # Try different datasets in order of preference
     datasets_to_try = [
         ("HuggingFaceFW/fineweb", "train", None),  # FineWeb
         ("allenai/c4", "train", "en"),  # C4 English
         ("EleutherAI/pile", "train", None),  # The Pile
     ]
-    
+
     for dataset_name, split_name, config_name in datasets_to_try:
         try:
             print(f"Testing access to {dataset_name}...")
             if config_name:
-                dataset = load_dataset(dataset_name, config_name, split=split_name, streaming=True)
+                dataset = load_dataset(
+                    dataset_name, config_name, split=split_name, streaming=True
+                )
             else:
                 dataset = load_dataset(dataset_name, split=split_name, streaming=True)
             # Just verify we can access it
             next(iter(dataset))
             print(f"✅ {dataset_name} dataset ready for training")
             return True
-            
+
         except Exception as e:
             print(f"Failed to access {dataset_name}: {e}")
             continue
-    
+
     print("❌ Failed to access any large-scale web text dataset.")
     print("Please ensure you have internet connection and datasets library installed.")
     return False
@@ -686,7 +697,7 @@ def train_epoch(
     """
     model.train()
     total_loss = 0.0
-    num_batches = max_batches if max_batches else float('inf')  # Handle streaming
+    num_batches = max_batches if max_batches else float("inf")  # Handle streaming
     optimizer.zero_grad()
     batch_idx = 0  # Initialize batch_idx
 
@@ -707,7 +718,9 @@ def train_epoch(
         total_loss += loss.item()
 
         # Update weights every accumulation_steps batches
-        if (batch_idx + 1) % accumulation_steps == 0 or (max_batches and batch_idx == max_batches - 1):
+        if (batch_idx + 1) % accumulation_steps == 0 or (
+            max_batches and batch_idx == max_batches - 1
+        ):
             # Gradient clipping to prevent explosion
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -765,7 +778,7 @@ def train_epoch(
                 print(
                     f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}"
                 )
-        
+
         # Break if we've reached max_batches for streaming datasets
         if max_batches and batch_idx + 1 >= max_batches:
             break
@@ -774,7 +787,7 @@ def train_epoch(
     actual_batches = batch_idx + 1 if batch_idx >= 0 else 0
     if max_batches:
         actual_batches = min(actual_batches, max_batches)
-    
+
     return total_loss / actual_batches if actual_batches > 0 else 0.0, global_step
 
 
@@ -790,7 +803,7 @@ def evaluate(model, val_loader, device, max_val_batches=100):
         for batch_idx, (input_batch, target_batch) in enumerate(val_loader):
             if batch_idx >= max_val_batches:
                 break
-                
+
             input_batch, target_batch = input_batch.to(device), target_batch.to(device)
             logits = model(input_batch)
             loss = torch.nn.functional.cross_entropy(
@@ -1086,7 +1099,7 @@ def main():
 
     # Load large-scale web text streaming dataset
     print("\n🚀 Setting up large-scale web text streaming dataset...")
-    
+
     if not load_openwebtext_streaming():
         print("❌ Failed to initialize large-scale web text dataset. Exiting.")
         return
@@ -1112,7 +1125,9 @@ def main():
     )
 
     print("✅ Streaming dataloaders created")
-    print("📊 Note: Batch count unknown for streaming dataset (will process large-scale web text data)")
+    print(
+        "📊 Note: Batch count unknown for streaming dataset (will process large-scale web text data)"
+    )
 
     # Initialize model
     print("\nInitializing model...")
@@ -1137,14 +1152,18 @@ def main():
         if loaded_model is not None:
             model = loaded_model
             optimizer = loaded_optimizer
-            
+
             # Handle additional epochs parameter
             if args.additional_epochs is not None:
                 target_epochs = start_epoch + args.additional_epochs
-                print(f"📈 Training {args.additional_epochs} additional epochs: {start_epoch} → {target_epochs}")
+                print(
+                    f"📈 Training {args.additional_epochs} additional epochs: {start_epoch} → {target_epochs}"
+                )
             else:
                 target_epochs = args.epochs
-                print(f"📈 Training until epoch {target_epochs} (current: {start_epoch})")
+                print(
+                    f"📈 Training until epoch {target_epochs} (current: {start_epoch})"
+                )
         else:
             print("Failed to load checkpoint. Starting from scratch.")
             start_epoch = 0
