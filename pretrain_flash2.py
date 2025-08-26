@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader, IterableDataset
 import tiktoken
 from datetime import datetime
 from datasets import load_dataset
+import random
 
 
 #####################################
@@ -45,8 +46,8 @@ class OpenWebTextDataset(IterableDataset):
     """Streaming dataset for large-scale web text data (FineWeb, C4, RedPajama)"""
 
     # init
-    # self, tokenizer, max_len, stride, buffer size 1000
-    def __init__(self, tokenizer, max_length, stride=None, buffer_size=1000):
+    # self, tokenizer, max_len, stride, buffer size 1000, skip_samples for starting position
+    def __init__(self, tokenizer, max_length, stride=None, buffer_size=1000, skip_samples=0):
         # tokenizer
         self.tokenizer = tokenizer
         # max len
@@ -55,9 +56,13 @@ class OpenWebTextDataset(IterableDataset):
         self.stride = stride if stride is not None else max_length
         # buff size for token
         self.buffer_size = buffer_size
+        # number of samples to skip at the beginning (for different starting positions)
+        self.skip_samples = skip_samples
 
         # load 1 of three
         print("Loading large-scale web text dataset...")
+        if skip_samples > 0:
+            print(f"Will skip first {skip_samples} samples to start from different position")
         dataset_loaded = False
 
         # Try different datasets in order of preference
@@ -103,6 +108,8 @@ class OpenWebTextDataset(IterableDataset):
     def __iter__(self):
         # buffer to acc document
         token_buffer = []
+        # track skipped samples
+        skipped_count = 0
 
         # Common text field names in different datasets
         text_fields = ["text", "content", "raw_content"]
@@ -123,6 +130,11 @@ class OpenWebTextDataset(IterableDataset):
 
             # Skip empty texts
             if not text or len(text.strip()) == 0:
+                continue
+
+            # Skip samples to start from different position
+            if skipped_count < self.skip_samples:
+                skipped_count += 1
                 continue
 
             try:
@@ -205,6 +217,8 @@ def create_openwebtext_dataloader(
     num_workers=0,
     # this is token buffer
     buffer_size=1000,
+    # skip samples to start from different position
+    skip_samples=0,
 ):
     # tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
@@ -219,6 +233,8 @@ def create_openwebtext_dataloader(
         stride=stride,
         # buff size
         buffer_size=buffer_size,
+        # skip samples to start from different position
+        skip_samples=skip_samples,
     )
 
     # Create dataloader for streaming dataset
@@ -1130,12 +1146,17 @@ def main():
     print("Creating streaming data loaders...")
     torch.manual_seed(123)
 
+    # Generate random starting position for training data (skip 0 to 10000 samples)
+    random_skip = random.randint(0, 10000)
+    print(f"🎲 Training will start from random position: skipping {random_skip} samples")
+
     # Create main training dataloader (streams entire dataset)
     train_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
         max_length=GPT_CONFIG_124M["context_length"],
         stride=GPT_CONFIG_124M["context_length"],
         num_workers=0,
+        skip_samples=random_skip,
     )
 
     # Create validation dataloader (will use first portion for validation)
