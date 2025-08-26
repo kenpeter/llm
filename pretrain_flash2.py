@@ -47,7 +47,9 @@ class OpenWebTextDataset(IterableDataset):
     # init
     # self, tokenizer, max_len, stride, buffer size 1000
     def __init__(self, tokenizer, max_length, stride=None, buffer_size=1000):
+        # tokenizer
         self.tokenizer = tokenizer
+        # max len
         self.max_length = max_length
         self.stride = stride if stride is not None else max_length
         self.buffer_size = buffer_size
@@ -181,10 +183,15 @@ def create_dataloader_v1(
 
 
 def create_openwebtext_dataloader(
+    # batch size 4
     batch_size=4,
+    # max len 256
     max_length=256,
+    # stride 128 slide win
     stride=128,
+    # zero worker
     num_workers=0,
+    # this is token buffer
     buffer_size=1000,
 ):
     """Create dataloader for streaming large-scale web text dataset"""
