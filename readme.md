@@ -1,7 +1,7 @@
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
-   
+
   
   python pretrain_flash2.py \
       --epochs 10 \
@@ -18,4 +18,5 @@
 
 
 
-  python pretrain_flash2.py --batch-size 16 ...
+
+  watch -n 1 nvidia-smi
