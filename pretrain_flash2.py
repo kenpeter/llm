@@ -56,7 +56,7 @@ class OpenWebTextDataset(IterableDataset):
         # buff size for token
         self.buffer_size = buffer_size
 
-        # Load the streaming dataset - try multiple large-scale web datasets
+        # load 1 of three
         print("Loading large-scale web text dataset...")
         dataset_loaded = False
 
@@ -67,12 +67,21 @@ class OpenWebTextDataset(IterableDataset):
             ("EleutherAI/pile", "train", None),  # The Pile
         ]
 
+        # load data set
         for dataset_name, split_name, config_name in datasets_to_try:
             try:
                 print(f"Trying {dataset_name} dataset...")
                 if config_name:
+                    # load data set from lib
                     self.dataset = load_dataset(
-                        dataset_name, config_name, split=split_name, streaming=True
+                        # dataset name: fine web
+                        # config name: en english
+                        # split name: training, test, val
+                        # stream true
+                        dataset_name,
+                        config_name,
+                        split=split_name,
+                        streaming=True,
                     )
                 else:
                     self.dataset = load_dataset(
@@ -90,8 +99,9 @@ class OpenWebTextDataset(IterableDataset):
 
         print("✅ Large-scale web text streaming dataset loaded successfully")
 
+    # iter the dataset
     def __iter__(self):
-        # Buffer to accumulate tokens across documents
+        # buffer to acc document
         token_buffer = []
 
         # Common text field names in different datasets
