@@ -4,10 +4,10 @@ import argparse
 import os
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, IterableDataset
 import tiktoken
 from datetime import datetime
-import urllib.request
+from datasets import load_dataset
 
 
 #####################################
@@ -37,6 +37,115 @@ class GPTDatasetV1(Dataset):
         return self.input_ids[idx], self.target_ids[idx]
 
 
+class OpenWebTextDataset(IterableDataset):
+    """Streaming dataset for large-scale web text data (FineWeb, C4, RedPajama)"""
+    
+    def __init__(self, tokenizer, max_length, stride=None, buffer_size=1000):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.stride = stride if stride is not None else max_length
+        self.buffer_size = buffer_size
+        
+        # Load the streaming dataset - try multiple large-scale web datasets
+        print("Loading large-scale web text dataset...")
+        dataset_loaded = False
+        
+        # Try different datasets in order of preference
+        datasets_to_try = [
+            ("HuggingFaceFW/fineweb", "train", None),  # FineWeb
+            ("allenai/c4", "train", "en"),  # C4 English
+            ("EleutherAI/pile", "train", None),  # The Pile
+        ]
+        
+        for dataset_name, split_name, config_name in datasets_to_try:
+            try:
+                print(f"Trying {dataset_name} dataset...")
+                if config_name:
+                    self.dataset = load_dataset(
+                        dataset_name,
+                        config_name,
+                        split=split_name,
+                        streaming=True
+                    )
+                else:
+                    self.dataset = load_dataset(
+                        dataset_name,
+                        split=split_name,
+                        streaming=True
+                    )
+                print(f"✅ Successfully loaded {dataset_name}")
+                dataset_loaded = True
+                break
+            except Exception as e:
+                print(f"Failed to load {dataset_name}: {e}")
+                continue
+        
+        if not dataset_loaded:
+            raise RuntimeError("Failed to load any large-scale web text dataset")
+        
+        print("✅ Large-scale web text streaming dataset loaded successfully")
+
+    def __iter__(self):
+        # Buffer to accumulate tokens across documents
+        token_buffer = []
+        
+        # Common text field names in different datasets
+        text_fields = ["text", "content", "raw_content"]
+        
+        for example in self.dataset:
+            # Find the text field
+            text = None
+            for field in text_fields:
+                if field in example:
+                    text = example[field]
+                    break
+            
+            if text is None:
+                print(f"Warning: No text field found in example: {list(example.keys())}")
+                continue
+                
+            # Skip empty texts
+            if not text or len(text.strip()) == 0:
+                continue
+            
+            try:
+                # Tokenize the text - allow endoftext tokens and disable disallowed special tokens
+                tokens = self.tokenizer.encode(
+                    text, 
+                    allowed_special={"<|endoftext|>"}, 
+                    disallowed_special=()
+                )
+                
+                # Add end of text token between documents
+                tokens.append(self.tokenizer.encode("<|endoftext|>")[0])
+                
+                # Add to buffer
+                token_buffer.extend(tokens)
+                
+                # Yield sequences when buffer is large enough
+                while len(token_buffer) >= self.max_length + 1:
+                    # Create input and target sequences
+                    input_chunk = token_buffer[:self.max_length]
+                    target_chunk = token_buffer[1:self.max_length + 1]
+                    
+                    yield torch.tensor(input_chunk), torch.tensor(target_chunk)
+                    
+                    # Move buffer forward by stride
+                    token_buffer = token_buffer[self.stride:]
+                    
+            except Exception as e:
+                # Reduce verbosity - only print first few errors
+                if not hasattr(self, '_error_count'):
+                    self._error_count = 0
+                if self._error_count < 3:
+                    print(f"Warning: Error processing text sample: {e}")
+                    self._error_count += 1
+                elif self._error_count == 3:
+                    print("... (suppressing further tokenization warnings)")
+                    self._error_count += 1
+                continue
+
+
 def create_dataloader_v1(
     txt,
     batch_size=4,
@@ -59,6 +168,35 @@ def create_dataloader_v1(
         shuffle=shuffle,
         drop_last=drop_last,
         num_workers=num_workers,
+    )
+
+    return dataloader
+
+
+def create_openwebtext_dataloader(
+    batch_size=4,
+    max_length=256,
+    stride=128,
+    num_workers=0,
+    buffer_size=1000,
+):
+    """Create dataloader for streaming large-scale web text dataset"""
+    # Initialize the tokenizer
+    tokenizer = tiktoken.get_encoding("gpt2")
+
+    # Create streaming dataset
+    dataset = OpenWebTextDataset(
+        tokenizer=tokenizer,
+        max_length=max_length,
+        stride=stride,
+        buffer_size=buffer_size
+    )
+
+    # Create dataloader for streaming dataset
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,  # Note: shuffle not applicable for streaming
     )
 
     return dataloader
@@ -440,22 +578,39 @@ def get_device():
     return device
 
 
-def load_text_data(file_path="the-verdict.txt"):
+def load_openwebtext_streaming():
     """
-    Load text data from file or download if not available
+    Load large-scale web text dataset in streaming mode for training
     """
-    if not os.path.exists(file_path):
-        print(f"Downloading {file_path}...")
-        url = "https://raw.githubusercontent.com/rasbt/LLMs-from-scratch/main/ch02/01_main-chapter-code/the-verdict.txt"
-        with urllib.request.urlopen(url) as response:
-            text_data = response.read().decode("utf-8")
-        with open(file_path, "w", encoding="utf-8") as file:
-            file.write(text_data)
-    else:
-        with open(file_path, "r", encoding="utf-8") as file:
-            text_data = file.read()
-
-    return text_data
+    print("🔄 Initializing large-scale web text streaming dataset...")
+    print("This will download data on-demand during training.")
+    
+    # Try different datasets in order of preference
+    datasets_to_try = [
+        ("HuggingFaceFW/fineweb", "train", None),  # FineWeb
+        ("allenai/c4", "train", "en"),  # C4 English
+        ("EleutherAI/pile", "train", None),  # The Pile
+    ]
+    
+    for dataset_name, split_name, config_name in datasets_to_try:
+        try:
+            print(f"Testing access to {dataset_name}...")
+            if config_name:
+                dataset = load_dataset(dataset_name, config_name, split=split_name, streaming=True)
+            else:
+                dataset = load_dataset(dataset_name, split=split_name, streaming=True)
+            # Just verify we can access it
+            next(iter(dataset))
+            print(f"✅ {dataset_name} dataset ready for training")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to access {dataset_name}: {e}")
+            continue
+    
+    print("❌ Failed to access any large-scale web text dataset.")
+    print("Please ensure you have internet connection and datasets library installed.")
+    return False
 
 
 def save_checkpoint(model, optimizer, epoch, loss, lr, checkpoint_dir="checkpoints"):
@@ -523,14 +678,17 @@ def train_epoch(
     log_interval=25,
     start_context_param="Who are you?",
     temperature=0.8,
+    max_batches=None,
 ):
     """
     Train model for one epoch with gradient accumulation and periodic validation
+    Supports streaming datasets with optional batch limit
     """
     model.train()
     total_loss = 0.0
-    num_batches = len(train_loader)
+    num_batches = max_batches if max_batches else float('inf')  # Handle streaming
     optimizer.zero_grad()
+    batch_idx = 0  # Initialize batch_idx
 
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
         input_batch = input_batch.to(device)
@@ -549,7 +707,7 @@ def train_epoch(
         total_loss += loss.item()
 
         # Update weights every accumulation_steps batches
-        if (batch_idx + 1) % accumulation_steps == 0 or batch_idx == num_batches - 1:
+        if (batch_idx + 1) % accumulation_steps == 0 or (max_batches and batch_idx == max_batches - 1):
             # Gradient clipping to prevent explosion
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -607,21 +765,41 @@ def train_epoch(
                 print(
                     f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}"
                 )
+        
+        # Break if we've reached max_batches for streaming datasets
+        if max_batches and batch_idx + 1 >= max_batches:
+            break
 
-    return total_loss / num_batches, global_step
+    # Handle case where no batches were processed
+    actual_batches = batch_idx + 1 if batch_idx >= 0 else 0
+    if max_batches:
+        actual_batches = min(actual_batches, max_batches)
+    
+    return total_loss / actual_batches if actual_batches > 0 else 0.0, global_step
 
 
-def evaluate(model, val_loader, device):
+def evaluate(model, val_loader, device, max_val_batches=100):
     """
-    Evaluate model on validation set
+    Evaluate model on validation set (limited batches for streaming)
     """
     model.eval()
     total_loss = 0.0
+    num_batches = 0
 
     with torch.no_grad():
-        total_loss = calc_loss_loader(val_loader, model, device)
+        for batch_idx, (input_batch, target_batch) in enumerate(val_loader):
+            if batch_idx >= max_val_batches:
+                break
+                
+            input_batch, target_batch = input_batch.to(device), target_batch.to(device)
+            logits = model(input_batch)
+            loss = torch.nn.functional.cross_entropy(
+                logits.flatten(0, 1), target_batch.flatten()
+            )
+            total_loss += loss.item()
+            num_batches += 1
 
-    return total_loss
+    return total_loss / num_batches if num_batches > 0 else float("inf")
 
 
 #####################################
@@ -800,10 +978,10 @@ def main():
         help="Directory to save checkpoints (default: checkpoints)",
     )
     parser.add_argument(
-        "--data-file",
-        type=str,
-        default="the-verdict.txt",
-        help="Text file to train on (default: the-verdict.txt)",
+        "--batches-per-epoch",
+        type=int,
+        default=10000,
+        help="Number of batches per epoch for streaming dataset (default: 10000)",
     )
     parser.add_argument(
         "--log-interval",
@@ -875,11 +1053,13 @@ def main():
     print(f"Micro batch size: {args.batch_size}")
     print(f"Gradient accumulation steps: {accumulation_steps}")
     print(f"Effective batch size: {effective_batch_size}")
+    print(f"Batches per epoch: {args.batches_per_epoch}")
     print(f"Save every: {args.save_every} epochs")
     print(f"Checkpoint dir: {args.checkpoint_dir}")
     print(f"Start context: '{args.start_context}'")
     print(f"Log interval: {args.log_interval}")
     print(f"Temperature: {args.temperature}")
+    print("📊 Training on large-scale web text dataset with streaming")
 
     if not FLASH_ATTN_AVAILABLE:
         print("\n📦 To install Flash Attention 2:")
@@ -904,43 +1084,35 @@ def main():
     # Get device
     device = get_device()
 
-    # Load text data
-    print("\nLoading text data...")
-    text_data = load_text_data(args.data_file)
-    print(f"Loaded {len(text_data):,} characters")
+    # Load large-scale web text streaming dataset
+    print("\n🚀 Setting up large-scale web text streaming dataset...")
+    
+    if not load_openwebtext_streaming():
+        print("❌ Failed to initialize large-scale web text dataset. Exiting.")
+        return
 
-    # Split data
-    train_ratio = 0.90
-    split_idx = int(train_ratio * len(text_data))
-    train_data = text_data[:split_idx]
-    val_data = text_data[split_idx:]
-
-    # Create data loaders
-    print("Creating data loaders...")
+    # Create streaming data loaders
+    print("Creating streaming data loaders...")
     torch.manual_seed(123)
 
-    train_loader = create_dataloader_v1(
-        train_data,
+    # Create main training dataloader (streams entire dataset)
+    train_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
         max_length=GPT_CONFIG_124M["context_length"],
         stride=GPT_CONFIG_124M["context_length"],
-        drop_last=True,
-        shuffle=True,
         num_workers=0,
     )
 
-    val_loader = create_dataloader_v1(
-        val_data,
+    # Create validation dataloader (will use first portion for validation)
+    val_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
         max_length=GPT_CONFIG_124M["context_length"],
         stride=GPT_CONFIG_124M["context_length"],
-        drop_last=False,
-        shuffle=False,
         num_workers=0,
     )
 
-    print(f"Training batches: {len(train_loader)}")
-    print(f"Validation batches: {len(val_loader)}")
+    print("✅ Streaming dataloaders created")
+    print("📊 Note: Batch count unknown for streaming dataset (will process large-scale web text data)")
 
     # Initialize model
     print("\nInitializing model...")
@@ -1003,6 +1175,7 @@ def main():
             args.log_interval,
             args.start_context,
             args.temperature,
+            args.batches_per_epoch,
         )
 
         # Evaluate

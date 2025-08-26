@@ -1,4 +1,8 @@
-python pretrain_flash2.py --mode inference --interactive
-
-
-python pretrain_flash2.py --resume checkpoints/latest_checkpoint.pt --additional-epochs 100 --lr 1e-5
+  python pretrain_flash2.py \
+      --epochs 50 \
+      --batches-per-epoch 10000 \
+      --batch-size 2 \
+      --effective-batch-size 32 \
+      --lr 3e-4 \
+      --save-every 5 \
+      --log-interval 100
