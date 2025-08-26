@@ -51,7 +51,9 @@ class OpenWebTextDataset(IterableDataset):
         self.tokenizer = tokenizer
         # max len
         self.max_length = max_length
+        # how much forward
         self.stride = stride if stride is not None else max_length
+        # buff size for token
         self.buffer_size = buffer_size
 
         # Load the streaming dataset - try multiple large-scale web datasets
@@ -194,15 +196,18 @@ def create_openwebtext_dataloader(
     # this is token buffer
     buffer_size=1000,
 ):
-    """Create dataloader for streaming large-scale web text dataset"""
-    # Initialize the tokenizer
+    # tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
 
-    # Create streaming dataset
+    # create stream dataset
     dataset = OpenWebTextDataset(
+        # tokenizer
         tokenizer=tokenizer,
+        # max len 256; the whole sentense can process
         max_length=max_length,
+        # stride means how much go forward, no repeat
         stride=stride,
+        # buff size
         buffer_size=buffer_size,
     )
 
