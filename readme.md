@@ -1,8 +1,8 @@
   python pretrain_flash2.py \
-      --epochs 100 \
-      --batches-per-epoch 10000 \
-      --batch-size 2 \
+      --epochs 10 \
+      --batches-per-epoch 2000 \
+      --batch-size 32 \
       --effective-batch-size 32 \
-      --lr 3e-4 \
-      --save-every 20 \
-      --log-interval 100
+      --lr 8e-4 \
+      --save-every 2 \
+      --log-interval 25
