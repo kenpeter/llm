@@ -21,7 +21,7 @@ class GPTDatasetV1(Dataset):
         self.target_ids = []
 
         # Tokenize the entire text
-        token_ids = tokenizer.encode(txt, allowed_special={"<|endoftext|>"})
+        token_ids = tokenizer.encode(txt, allowed_special={"<|endoftext|>"}, disallowed_special=())
 
         # Use a sliding window to chunk the book into overlapping sequences of max_length
         for i in range(0, len(token_ids) - max_length, stride):
@@ -117,7 +117,7 @@ class OpenWebTextDataset(IterableDataset):
                 )
                 
                 # Add end of text token between documents
-                tokens.append(self.tokenizer.encode("<|endoftext|>")[0])
+                tokens.append(self.tokenizer.encode("<|endoftext|>", allowed_special={"<|endoftext|>"}, disallowed_special=())[0])
                 
                 # Add to buffer
                 token_buffer.extend(tokens)
@@ -496,7 +496,7 @@ def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0
 
 
 def text_to_token_ids(text, tokenizer):
-    encoded = tokenizer.encode(text, allowed_special={"<|endoftext|>"})
+    encoded = tokenizer.encode(text, allowed_special={"<|endoftext|>"}, disallowed_special=())
     encoded_tensor = torch.tensor(encoded).unsqueeze(0)  # add batch dimension
     return encoded_tensor
 
