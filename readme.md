@@ -1,3 +1,12 @@
+Going down
+
+<img width="1600" height="921" alt="down" src="https://github.com/user-attachments/assets/e6e1f50f-840f-4abc-b694-21957dab9861" />
+
+
+
+   
+   
+   
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
