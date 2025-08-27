@@ -47,7 +47,9 @@ class OpenWebTextDataset(IterableDataset):
 
     # init
     # self, tokenizer, max_len, stride, buffer size 1000, skip_samples for starting position
-    def __init__(self, tokenizer, max_length, stride=None, buffer_size=1000, skip_samples=0):
+    def __init__(
+        self, tokenizer, max_length, stride=None, buffer_size=1000, skip_samples=0
+    ):
         # tokenizer
         self.tokenizer = tokenizer
         # max len
@@ -62,7 +64,9 @@ class OpenWebTextDataset(IterableDataset):
         # load 1 of three
         print("Loading large-scale web text dataset...")
         if skip_samples > 0:
-            print(f"Will skip first {skip_samples} samples to start from different position")
+            print(
+                f"Will skip first {skip_samples} samples to start from different position"
+            )
         dataset_loaded = False
 
         # Try different datasets in order of preference
@@ -89,6 +93,7 @@ class OpenWebTextDataset(IterableDataset):
                         streaming=True,
                     )
                 else:
+                    # no config name just load data set
                     self.dataset = load_dataset(
                         dataset_name, split=split_name, streaming=True
                     )
@@ -111,11 +116,11 @@ class OpenWebTextDataset(IterableDataset):
         # track skipped samples
         skipped_count = 0
 
-        # Common text field names in different datasets
+        # common text field name in data set
         text_fields = ["text", "content", "raw_content"]
 
         for example in self.dataset:
-            # Find the text field
+            # find the text field name
             text = None
             for field in text_fields:
                 if field in example:
@@ -495,7 +500,7 @@ class GPTModel(nn.Module):
 GPT_CONFIG = {
     "vocab_size": 50257,  # Vocabulary size
     "context_length": 512,  # Moderate context (2x original)
-    "emb_dim": 896,  # Smaller embedding (~150M parameters)  
+    "emb_dim": 896,  # Smaller embedding (~150M parameters)
     "n_heads": 14,  # More attention heads (divisible by 896)
     "n_layers": 18,  # Deeper than original
     "drop_rate": 0.1,  # Lower dropout for larger model
@@ -662,7 +667,9 @@ def load_openwebtext_streaming():
     return False
 
 
-def save_checkpoint(model, optimizer, epoch, loss, lr, model_config, checkpoint_dir="checkpoints"):
+def save_checkpoint(
+    model, optimizer, epoch, loss, lr, model_config, checkpoint_dir="checkpoints"
+):
     """
     Save model checkpoint including model state, optimizer state, and training info
     """
@@ -1153,7 +1160,9 @@ def main():
 
     # Generate random starting position for training data (skip 0 to 10000 samples)
     random_skip = random.randint(0, 10000)
-    print(f"🎲 Training will start from random position: skipping {random_skip} samples")
+    print(
+        f"🎲 Training will start from random position: skipping {random_skip} samples"
+    )
 
     # Create main training dataloader (streams entire dataset)
     train_loader = create_openwebtext_dataloader(
@@ -1188,10 +1197,10 @@ def main():
 
     # Initialize optimizer with better settings for large model
     optimizer = torch.optim.AdamW(
-        model.parameters(), 
-        lr=args.lr, 
+        model.parameters(),
+        lr=args.lr,
         weight_decay=0.01,  # Lower weight decay for larger model
-        betas=(0.9, 0.95)   # Better beta values for language modeling
+        betas=(0.9, 0.95),  # Better beta values for language modeling
     )
 
     # Load checkpoint if resuming
@@ -1224,12 +1233,10 @@ def main():
             target_epochs = args.epochs
     else:
         target_epochs = args.epochs
-    
+
     # Add cosine annealing learning rate scheduler after target_epochs is defined
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, 
-        T_max=target_epochs, 
-        eta_min=1e-6
+        optimizer, T_max=target_epochs, eta_min=1e-6
     )
 
     # Training loop with early stopping
@@ -1289,7 +1296,13 @@ def main():
             print(f"New best validation loss: {best_val_loss:.4f}")
             # Save best model immediately
             save_checkpoint(
-                model, optimizer, epoch, val_loss, args.lr, model_config, args.checkpoint_dir
+                model,
+                optimizer,
+                epoch,
+                val_loss,
+                args.lr,
+                model_config,
+                args.checkpoint_dir,
             )
         else:
             epochs_without_improvement += 1
@@ -1307,11 +1320,17 @@ def main():
 
         # Step learning rate scheduler
         scheduler.step()
-        
+
         # Save checkpoint periodically
         if (epoch + 1) % args.save_every == 0:
             save_checkpoint(
-                model, optimizer, epoch, val_loss, args.lr, model_config, args.checkpoint_dir
+                model,
+                optimizer,
+                epoch,
+                val_loss,
+                args.lr,
+                model_config,
+                args.checkpoint_dir,
             )
 
     print("\n" + "=" * 60)
@@ -1320,7 +1339,13 @@ def main():
 
     # Save final model
     final_checkpoint = save_checkpoint(
-        model, optimizer, target_epochs - 1, best_val_loss, args.lr, model_config, args.checkpoint_dir
+        model,
+        optimizer,
+        target_epochs - 1,
+        best_val_loss,
+        args.lr,
+        model_config,
+        args.checkpoint_dir,
     )
     print(f"Final model saved to: {final_checkpoint}")
 
