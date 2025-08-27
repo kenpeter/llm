@@ -3,14 +3,11 @@
 
 
   
-  python pretrain_flash2.py \
-      --epochs 10 \
-      --batches-per-epoch 2000 \
-      --batch-size 8 \
-      --effective-batch-size 32 \
-      --lr 8e-4 \
-      --save-every 2 \
-      --log-interval 50
+python pretrain_flash2.py --resume checkpoints/latest_checkpoint.pt --lr 5e-5 --additional-epochs 25
+
+
+python pretrain_flash2.py --batch-size 1 --effective-batch-size 64 --lr 5e-5
+
 
 
 
