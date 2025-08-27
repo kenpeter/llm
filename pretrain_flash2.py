@@ -494,10 +494,10 @@ class GPTModel(nn.Module):
 
 GPT_CONFIG = {
     "vocab_size": 50257,  # Vocabulary size
-    "context_length": 2048,  # Much longer context length
-    "emb_dim": 2048,  # Large embedding dimension (~1B parameters)
-    "n_heads": 32,  # Many attention heads
-    "n_layers": 24,  # Deep model
+    "context_length": 512,  # Moderate context (2x original)
+    "emb_dim": 896,  # Smaller embedding (~150M parameters)  
+    "n_heads": 14,  # More attention heads (divisible by 896)
+    "n_layers": 18,  # Deeper than original
     "drop_rate": 0.1,  # Lower dropout for larger model
     "qkv_bias": False,  # Query-key-value bias
 }
