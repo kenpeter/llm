@@ -492,13 +492,13 @@ class GPTModel(nn.Module):
 # Configuration
 #####################################
 
-GPT_CONFIG_124M = {
+GPT_CONFIG = {
     "vocab_size": 50257,  # Vocabulary size
-    "context_length": 256,  # Shortened context length (orig: 1024)
-    "emb_dim": 768,  # Embedding dimension
-    "n_heads": 12,  # Number of attention heads
-    "n_layers": 12,  # Number of layers
-    "drop_rate": 0.5,  # Very high dropout to combat severe overfitting
+    "context_length": 2048,  # Much longer context length
+    "emb_dim": 2048,  # Large embedding dimension (~1B parameters)
+    "n_heads": 32,  # Many attention heads
+    "n_layers": 24,  # Deep model
+    "drop_rate": 0.1,  # Lower dropout for larger model
     "qkv_bias": False,  # Query-key-value bias
 }
 
@@ -662,7 +662,7 @@ def load_openwebtext_streaming():
     return False
 
 
-def save_checkpoint(model, optimizer, epoch, loss, lr, checkpoint_dir="checkpoints"):
+def save_checkpoint(model, optimizer, epoch, loss, lr, model_config, checkpoint_dir="checkpoints"):
     """
     Save model checkpoint including model state, optimizer state, and training info
     """
@@ -674,7 +674,7 @@ def save_checkpoint(model, optimizer, epoch, loss, lr, checkpoint_dir="checkpoin
         "optimizer_state_dict": optimizer.state_dict(),
         "loss": loss,
         "lr": lr,
-        "config": GPT_CONFIG_124M,
+        "config": model_config,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -858,7 +858,7 @@ def evaluate(model, val_loader, device, max_val_batches=100):
 #####################################
 
 
-def run_inference(args):
+def run_inference(args, model_config=None):
     """
     Run text generation inference with trained model
     """
@@ -875,7 +875,9 @@ def run_inference(args):
 
     # Initialize model
     print("\nInitializing model...")
-    model = GPTModel(GPT_CONFIG_124M)
+    if model_config is None:
+        model_config = GPT_CONFIG  # fallback
+    model = GPTModel(model_config)
     model = model.to(device)
 
     # Load checkpoint
@@ -922,7 +924,7 @@ def run_inference(args):
                         model=model,
                         idx=token_ids,
                         max_new_tokens=args.max_tokens,
-                        context_size=GPT_CONFIG_124M["context_length"],
+                        context_size=model_config["context_length"],
                         temperature=args.temperature,
                     )
 
@@ -950,7 +952,7 @@ def run_inference(args):
                     model=model,
                     idx=token_ids,
                     max_new_tokens=args.max_tokens,
-                    context_size=GPT_CONFIG_124M["context_length"],
+                    context_size=model_config["context_length"],
                     temperature=args.temperature,
                 )
 
@@ -989,8 +991,8 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=100,
-        help="Total number of training epochs (default: 100)",
+        default=200,
+        help="Total number of training epochs (default: 200)",
     )
     parser.add_argument(
         "--additional-epochs",
@@ -1001,8 +1003,8 @@ def main():
     parser.add_argument(
         "--lr",
         type=float,
-        default=5e-5,
-        help="Learning rate for AdamW optimizer (default: 5e-4)",
+        default=1e-4,
+        help="Learning rate for AdamW optimizer (default: 1e-4)",
     )
     parser.add_argument(
         "--batch-size",
@@ -1013,8 +1015,8 @@ def main():
     parser.add_argument(
         "--effective-batch-size",
         type=int,
-        default=32,
-        help="Effective batch size via gradient accumulation (default: 32)",
+        default=128,
+        help="Effective batch size via gradient accumulation (default: 128)",
     )
     parser.add_argument(
         "--save-every",
@@ -1031,8 +1033,8 @@ def main():
     parser.add_argument(
         "--batches-per-epoch",
         type=int,
-        default=10000,
-        help="Number of batches per epoch for streaming dataset (default: 10000)",
+        default=50000,
+        help="Number of batches per epoch for streaming dataset (default: 50000)",
     )
     parser.add_argument(
         "--log-interval",
@@ -1055,8 +1057,8 @@ def main():
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=10,
-        help="Stop training if validation loss doesn't improve for N epochs (default: 10)",
+        default=50,
+        help="Stop training if validation loss doesn't improve for N epochs (default: 50)",
     )
 
     # Inference-specific arguments
@@ -1086,9 +1088,12 @@ def main():
 
     args = parser.parse_args()
 
+    # Use model configuration
+    model_config = GPT_CONFIG
+
     # Route to appropriate function based on mode
     if args.mode == "inference":
-        run_inference(args)
+        run_inference(args, model_config)
         return
 
     # Training mode - Calculate gradient accumulation steps
@@ -1153,8 +1158,8 @@ def main():
     # Create main training dataloader (streams entire dataset)
     train_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
-        max_length=GPT_CONFIG_124M["context_length"],
-        stride=GPT_CONFIG_124M["context_length"],
+        max_length=model_config["context_length"],
+        stride=model_config["context_length"],
         num_workers=0,
         skip_samples=random_skip,
     )
@@ -1162,8 +1167,8 @@ def main():
     # Create validation dataloader (will use first portion for validation)
     val_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
-        max_length=GPT_CONFIG_124M["context_length"],
-        stride=GPT_CONFIG_124M["context_length"],
+        max_length=model_config["context_length"],
+        stride=model_config["context_length"],
         num_workers=0,
     )
 
@@ -1175,14 +1180,19 @@ def main():
     # Initialize model
     print("\nInitializing model...")
     torch.manual_seed(123)
-    model = GPTModel(GPT_CONFIG_124M)
+    model = GPTModel(model_config)
     model = model.to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
 
-    # Initialize optimizer with higher weight decay to combat overfitting
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.3)
+    # Initialize optimizer with better settings for large model
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=args.lr, 
+        weight_decay=0.01,  # Lower weight decay for larger model
+        betas=(0.9, 0.95)   # Better beta values for language modeling
+    )
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -1214,6 +1224,13 @@ def main():
             target_epochs = args.epochs
     else:
         target_epochs = args.epochs
+    
+    # Add cosine annealing learning rate scheduler after target_epochs is defined
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=target_epochs, 
+        eta_min=1e-6
+    )
 
     # Training loop with early stopping
     print(f"\nStarting training from epoch {start_epoch}...")
@@ -1257,7 +1274,7 @@ def main():
                 model=model,
                 idx=token_ids,
                 max_new_tokens=15,
-                context_size=GPT_CONFIG_124M["context_length"],
+                context_size=model_config["context_length"],
                 temperature=args.temperature,
             )
 
@@ -1272,7 +1289,7 @@ def main():
             print(f"New best validation loss: {best_val_loss:.4f}")
             # Save best model immediately
             save_checkpoint(
-                model, optimizer, epoch, val_loss, args.lr, args.checkpoint_dir
+                model, optimizer, epoch, val_loss, args.lr, model_config, args.checkpoint_dir
             )
         else:
             epochs_without_improvement += 1
@@ -1288,10 +1305,13 @@ def main():
                 print(f"Best validation loss: {best_val_loss:.4f}")
                 break
 
+        # Step learning rate scheduler
+        scheduler.step()
+        
         # Save checkpoint periodically
         if (epoch + 1) % args.save_every == 0:
             save_checkpoint(
-                model, optimizer, epoch, val_loss, args.lr, args.checkpoint_dir
+                model, optimizer, epoch, val_loss, args.lr, model_config, args.checkpoint_dir
             )
 
     print("\n" + "=" * 60)
@@ -1300,7 +1320,7 @@ def main():
 
     # Save final model
     final_checkpoint = save_checkpoint(
-        model, optimizer, target_epochs - 1, best_val_loss, args.lr, args.checkpoint_dir
+        model, optimizer, target_epochs - 1, best_val_loss, args.lr, model_config, args.checkpoint_dir
     )
     print(f"Final model saved to: {final_checkpoint}")
 
