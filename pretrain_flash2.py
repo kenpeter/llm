@@ -58,7 +58,7 @@ class OpenWebTextDataset(IterableDataset):
         self.stride = stride if stride is not None else max_length
         # buff size for token
         self.buffer_size = buffer_size
-        # number of samples to skip at the beginning (for different starting positions)
+        # randome skip sample, so start from diff position
         self.skip_samples = skip_samples
 
         # load 1 of three
@@ -120,10 +120,11 @@ class OpenWebTextDataset(IterableDataset):
         text_fields = ["text", "content", "raw_content"]
 
         for example in self.dataset:
-            # find the text field name
+            # find the text field name, loop them
             text = None
             for field in text_fields:
                 if field in example:
+                    # find the right text
                     text = example[field]
                     break
 
@@ -143,12 +144,12 @@ class OpenWebTextDataset(IterableDataset):
                 continue
 
             try:
-                # Tokenize the text - allow endoftext tokens and disable disallowed special tokens
+                # tokenize the text, become one seq token
                 tokens = self.tokenizer.encode(
                     text, allowed_special={"<|endoftext|>"}, disallowed_special=()
                 )
 
-                # Add end of text token between documents
+                # add end of text between documents
                 tokens.append(
                     self.tokenizer.encode(
                         "<|endoftext|>",
@@ -157,10 +158,10 @@ class OpenWebTextDataset(IterableDataset):
                     )[0]
                 )
 
-                # Add to buffer
+                # 1 doc in buffer
                 token_buffer.extend(tokens)
 
-                # Yield sequences when buffer is large enough
+                # clide win the buffer
                 while len(token_buffer) >= self.max_length + 1:
                     # Create input and target sequences
                     input_chunk = token_buffer[: self.max_length]
@@ -1158,7 +1159,7 @@ def main():
     print("Creating streaming data loaders...")
     torch.manual_seed(123)
 
-    # Generate random starting position for training data (skip 0 to 10000 samples)
+    # the idea is to loop sample, then pick random start
     random_skip = random.randint(0, 10000)
     print(
         f"🎲 Training will start from random position: skipping {random_skip} samples"
