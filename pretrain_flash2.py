@@ -167,6 +167,7 @@ class OpenWebTextDataset(IterableDataset):
                     input_chunk = token_buffer[: self.max_length]
                     target_chunk = token_buffer[1 : self.max_length + 1]
 
+                    # this is generator, next will pull out the data
                     yield torch.tensor(input_chunk), torch.tensor(target_chunk)
 
                     # Move buffer forward by stride
