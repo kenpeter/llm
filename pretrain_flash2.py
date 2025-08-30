@@ -360,12 +360,13 @@ class FlashAttention(nn.Module):
 
         # Use PyTorch's Scaled Dot Product Attention (SDPA) as fallback
         if not FLASH_ATTN_AVAILABLE:
-            # SDPA expects format: (batch, num_heads, seq_len, head_dim)
+            # SDPA (scaled dot product attention) expects format: (batch, num_heads, seq_len, head_dim)
             q = q.transpose(1, 2)  # Swap seq_len and num_heads dimensions
             k = k.transpose(1, 2)  # Swap seq_len and num_heads dimensions
             v = v.transpose(1, 2)  # Swap seq_len and num_heads dimensions
 
-            # Compute attention using PyTorch's optimized SDPA
+            # use scaled dot product attn
+            # scaled dot product attn (pytorch, more mem) VS flash attn 2 (NVDA, smaller block, tile, less mem)
             attn_output = torch.nn.functional.scaled_dot_product_attention(
                 q,
                 k,
@@ -483,6 +484,7 @@ class GPTModel(nn.Module):
             *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
         )
 
+        # normalized beofre final
         self.final_norm = LayerNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
 
@@ -617,6 +619,7 @@ def calc_loss_loader(data_loader, model, device, num_batches=None):
 #####################################
 
 
+# get device
 def get_device():
     """
     Detect and return the best available device (CUDA, MPS, or CPU)
@@ -639,6 +642,7 @@ def get_device():
     return device
 
 
+# big dataset use streaming
 def load_openwebtext_streaming():
     """
     Load large-scale web text dataset in streaming mode for training
@@ -676,6 +680,7 @@ def load_openwebtext_streaming():
     return False
 
 
+# save check point
 def save_checkpoint(
     model, optimizer, epoch, loss, lr, model_config, checkpoint_dir="checkpoints"
 ):
@@ -708,6 +713,7 @@ def save_checkpoint(
     return checkpoint_path
 
 
+# load checkpoint
 def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     """
     Load model checkpoint and resume training state
@@ -756,6 +762,7 @@ def train_epoch(
     optimizer.zero_grad()
     batch_idx = 0  # Initialize batch_idx
 
+    # in single epoch, we have input batch and target batch
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
         input_batch = input_batch.to(device)
         target_batch = target_batch.to(device)
@@ -767,6 +774,7 @@ def train_epoch(
 
         # Scale loss by accumulation steps for backward pass
         scaled_loss = loss / accumulation_steps
+        # cal gradient val
         scaled_loss.backward()
 
         # so the loss just acc
@@ -804,10 +812,12 @@ def train_epoch(
                         if val_batch_idx >= 5:  # Only use first 5 batches for speed
                             break
 
-                        # ok, so basically
+                        # ok, so basically, val
                         val_input, val_target = val_input.to(device), val_target.to(
                             device
                         )
+
+                        # logit, cross entropy
                         val_logits = model(val_input)
                         val_batch_loss = torch.nn.functional.cross_entropy(
                             val_logits.flatten(0, 1), val_target.flatten()
@@ -817,7 +827,7 @@ def train_epoch(
 
                 val_loss = val_loss / val_samples if val_samples > 0 else float("inf")
 
-                # Generate sample text to show progress
+                # gen some text to show progress
                 import tiktoken
 
                 tokenizer = tiktoken.get_encoding("gpt2")
@@ -1179,10 +1189,10 @@ def main():
     print("Creating streaming data loaders...")
     torch.manual_seed(123)
 
-    # the idea is to loop sample, then pick random start
-    random_skip = random.randint(0, 10000)
+    # train from beginning of dataset
+    random_skip = 0
     print(
-        f"🎲 Training will start from random position: skipping {random_skip} samples"
+        f"📚 Training will start from beginning: skipping {random_skip} samples"
     )
 
     # Create main training dataloader (streams entire dataset)
@@ -1194,10 +1204,10 @@ def main():
         skip_samples=random_skip,
     )
 
-    # Create validation dataloader with different random start for fresh data
-    val_random_skip = random.randint(50000, 100000)
+    # Create validation dataloader from end of dataset for held-out data
+    val_random_skip = 1000000  # Skip 1M samples to get end portion
     print(
-        f"🎲 Validation will start from random position: skipping {val_random_skip} samples"
+        f"📖 Validation will start from end portion: skipping {val_random_skip} samples"
     )
     val_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
