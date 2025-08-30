@@ -301,32 +301,32 @@ class FlashAttention(nn.Module):
         # x: [b, seq_len, embed_dim] -> [b, 512, 896]
         batch_size, seq_len, embed_dim = x.shape
 
-        # Project input to Q, K, V tensors in single operation
-        qkv = self.qkv_proj(x)  # Shape: (batch_size, seq_len, 3 * d_out)
+        # project x into qkv, in a single operation
+        # (b, seq_len, 3 * d_out)
+        qkv = self.qkv_proj(x)
 
-        # Split and reshape for multi-head attention
-        # reshape to separate Q, K, V and multi-heads
+        # [b, seq_len, 3, 14, 64]
+        # head_n * head_dim = 896
         qkv = qkv.view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
-        # Permute to get Q, K, V as separate tensors with head dimension
-        qkv = qkv.permute(
-            2, 0, 1, 3, 4
-        )  # Shape: (3, batch_size, seq_len, num_heads, head_dim)
-        # Extract Query, Key, Value tensors
+        # new shape: (3, batch_size, seq_len, num_heads, head_dim)
+        qkv = qkv.permute(2, 0, 1, 3, 4)
+        # q, k, v, start at random, then later converted
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         # Try to use Flash Attention 2 if available
         if FLASH_ATTN_AVAILABLE:
-            # Flash Attention 2 expects (batch, seq_len, num_heads, head_dim)
+            # flash attn 2 expects (batch, seq_len, num_heads, head_dim)
+            # this layer works the best, as batch, len, then head_n, head_dim
             try:
-                # flash aten works best with fp16/bf16 precision
+                # flash aten works best with fp16/bf16 precision, why? because middle ground
                 if x.dtype in [torch.float32]:
-                    # Convert to half precision for Flash Attention
+                    # fp32 to fp16 best
                     q, k, v = q.half(), k.half(), v.half()
                     use_fp16 = True
                 else:
                     use_fp16 = False
 
-                # call flash attn function with optimized CUDA kernels
+                # attn2 with qkv
                 attn_output = flash_attn_func(
                     q,
                     k,
@@ -1196,7 +1196,9 @@ def main():
 
     # Create validation dataloader with different random start for fresh data
     val_random_skip = random.randint(50000, 100000)
-    print(f"🎲 Validation will start from random position: skipping {val_random_skip} samples")
+    print(
+        f"🎲 Validation will start from random position: skipping {val_random_skip} samples"
+    )
     val_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
         max_length=model_config["context_length"],
