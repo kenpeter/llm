@@ -170,7 +170,7 @@ class OpenWebTextDataset(IterableDataset):
                     # this is generator, next will pull out the data
                     yield torch.tensor(input_chunk), torch.tensor(target_chunk)
 
-                    # Move buffer forward by stride
+                    # move buffer forward by stride
                     token_buffer = token_buffer[self.stride :]
 
             except Exception as e:
@@ -269,8 +269,10 @@ except ImportError:
     print("⚠️  Flash Attention 2 not available, falling back to PyTorch SDPA")
 
 
+# flash attention
 class FlashAttention(nn.Module):
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
+        # super
         super().__init__()
         # Ensure output dimension is evenly divisible by number of heads
         assert d_out % num_heads == 0, "d_out must be divisible by n_heads"
@@ -285,25 +287,25 @@ class FlashAttention(nn.Module):
         # drop prob
         self.dropout = dropout
 
-        # QKV projection in one linear layer for efficiency (instead of 3 separate)
+        # qkv projection in one linear layer for efficiency (instead of 3 separate)
         self.qkv_proj = nn.Linear(d_in, 3 * d_out, bias=qkv_bias)
-        # Output projection to combine multi-head results
+        # output projection to combine multi-head results (via y = ax+b)
         self.out_proj = nn.Linear(d_out, d_out)
 
-        # Dropout layer for regularization
+        # dropout layer for regularization
         self.dropout_layer = nn.Dropout(dropout)
 
     def forward(self, x):
-        # Access global Flash Attention availability flag
+        # flash attn there
         global FLASH_ATTN_AVAILABLE
-        # Get input tensor dimensions
+        # x: [b, seq_len, embed_dim] -> [b, 512, 896]
         batch_size, seq_len, embed_dim = x.shape
 
         # Project input to Q, K, V tensors in single operation
         qkv = self.qkv_proj(x)  # Shape: (batch_size, seq_len, 3 * d_out)
 
         # Split and reshape for multi-head attention
-        # Reshape to separate Q, K, V and multi-heads
+        # reshape to separate Q, K, V and multi-heads
         qkv = qkv.view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
         # Permute to get Q, K, V as separate tensors with head dimension
         qkv = qkv.permute(
@@ -316,7 +318,7 @@ class FlashAttention(nn.Module):
         if FLASH_ATTN_AVAILABLE:
             # Flash Attention 2 expects (batch, seq_len, num_heads, head_dim)
             try:
-                # Flash Attention works best with fp16/bf16 precision
+                # flash aten works best with fp16/bf16 precision
                 if x.dtype in [torch.float32]:
                     # Convert to half precision for Flash Attention
                     q, k, v = q.half(), k.half(), v.half()
@@ -324,7 +326,7 @@ class FlashAttention(nn.Module):
                 else:
                     use_fp16 = False
 
-                # Call Flash Attention function with optimized CUDA kernels
+                # call flash attn function with optimized CUDA kernels
                 attn_output = flash_attn_func(
                     q,
                     k,
@@ -388,6 +390,7 @@ class FlashAttention(nn.Module):
         return output
 
 
+# layer norm
 class LayerNorm(nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
@@ -402,6 +405,7 @@ class LayerNorm(nn.Module):
         return self.scale * norm_x + self.shift
 
 
+# GELU
 class GELU(nn.Module):
     def __init__(self):
         super().__init__()
@@ -547,6 +551,7 @@ def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0
     return idx
 
 
+# text to token id
 def text_to_token_ids(text, tokenizer):
     encoded = tokenizer.encode(
         text, allowed_special={"<|endoftext|>"}, disallowed_special=()
@@ -555,11 +560,13 @@ def text_to_token_ids(text, tokenizer):
     return encoded_tensor
 
 
+# token to text
 def token_ids_to_text(token_ids, tokenizer):
     flat = token_ids.squeeze(0)  # remove batch dimension
     return tokenizer.decode(flat.tolist())
 
 
+# val loss === cross entropy loss
 def calc_loss_batch(input_batch, target_batch, model, device):
     # by default most of things start in cpu, e.g. load file, torch.tensor, etc, so we need to move to GPU
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
@@ -724,6 +731,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
+# single epoch
 def train_epoch(
     model,
     train_loader,
@@ -761,31 +769,42 @@ def train_epoch(
         scaled_loss = loss / accumulation_steps
         scaled_loss.backward()
 
-        # Add unscaled loss for correct averaging
+        # so the loss just acc
         total_loss += loss.item()
 
         # Update weights every accumulation_steps batches
         if (batch_idx + 1) % accumulation_steps == 0 or (
             max_batches and batch_idx == max_batches - 1
         ):
-            # Gradient clipping to prevent explosion
+            # gradient clip to prevent too much
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # update gradient
             optimizer.step()
+            # now clean them up
             optimizer.zero_grad()
+            # global step  done
             global_step += 1
 
-            # Print progress with both train and validation loss every log_interval steps
+            # at each log interval, we need to print out train loss and val loss
             if global_step % log_interval == 0:
+                # total loss // batch id = single train loss
                 current_train_loss = total_loss / (batch_idx + 1)
 
-                # Quick validation loss calculation
+                # model enter eval mode
                 model.eval()
+                # val loss zero
                 val_loss = 0.0
+                # val sample
                 val_samples = 0
+                # no grad update
                 with torch.no_grad():
+                    # loop val loader, so we get batch idx, input and target in val scope
                     for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
+                        # only use first 5 batches
                         if val_batch_idx >= 5:  # Only use first 5 batches for speed
                             break
+
+                        # ok, so basically
                         val_input, val_target = val_input.to(device), val_target.to(
                             device
                         )
@@ -1175,12 +1194,15 @@ def main():
         skip_samples=random_skip,
     )
 
-    # Create validation dataloader (will use first portion for validation)
+    # Create validation dataloader with different random start for fresh data
+    val_random_skip = random.randint(50000, 100000)
+    print(f"🎲 Validation will start from random position: skipping {val_random_skip} samples")
     val_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
         max_length=model_config["context_length"],
         stride=model_config["context_length"],
         num_workers=0,
+        skip_samples=val_random_skip,
     )
 
     print("✅ Streaming dataloaders created")
