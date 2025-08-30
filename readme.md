@@ -11,7 +11,7 @@ Going down
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
-  python pretrain_flash2.py --batch-size 1 --effective-batch-size 8 --lr 1e-5 --model-path checkpoints/checkpoint_epoch_0043.pt
+  python pretrain_flash2.py --batch-size 1 --effective-batch-size 8 --lr 1e-5 --resume checkpoints/latest_checkpoint.pt
 
 
 
