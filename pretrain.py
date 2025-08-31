@@ -694,6 +694,48 @@ def evaluate(model, val_loader, device):
     return total_loss
 
 
+def run_inference(model, device, prompt, max_tokens=50, temperature=0.8, context_size=256):
+    """
+    Run inference with the model to generate text from a prompt
+    """
+    import tiktoken
+    tokenizer = tiktoken.get_encoding("gpt2")
+    
+    print(f"🤖 GPT Inference Mode")
+    print(f"Prompt: '{prompt}'")
+    print(f"Max tokens: {max_tokens}")
+    print(f"Temperature: {temperature}")
+    print("-" * 50)
+    
+    model.eval()
+    
+    # Encode the prompt
+    token_ids = text_to_token_ids(prompt, tokenizer).to(device)
+    
+    # Generate text
+    with torch.no_grad():
+        generated_ids = generate_text_simple(
+            model=model,
+            idx=token_ids,
+            max_new_tokens=max_tokens,
+            context_size=context_size,
+            temperature=temperature
+        )
+    
+    # Decode the generated text
+    generated_text = token_ids_to_text(generated_ids, tokenizer)
+    
+    # Extract only the new tokens (remove the original prompt)
+    new_tokens = generated_text[len(prompt):]
+    
+    print(f"Generated text:")
+    print(f"{prompt}{new_tokens}")
+    print("-" * 50)
+    print(f"Total tokens generated: {len(tokenizer.encode(new_tokens))}")
+    
+    return generated_text
+
+
 #####################################
 # Main Training Function
 #####################################
@@ -781,6 +823,23 @@ def main():
         type=str,
         default=None,
         help="Custom path to pretrained weights file (default: None)",
+    )
+    parser.add_argument(
+        "--inference",
+        action="store_true",
+        help="Run in inference mode instead of training",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="The future of artificial intelligence is",
+        help="Prompt for inference mode (default: 'The future of artificial intelligence is')",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=50,
+        help="Maximum tokens to generate in inference mode (default: 50)",
     )
 
     args = parser.parse_args()
@@ -889,7 +948,23 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
 
-    # Initialize optimizer
+    # If inference mode, run inference and exit
+    if args.inference:
+        if not args.load_pretrained:
+            print("⚠️  Warning: Running inference without pretrained weights. Results may be poor.")
+        
+        context_size = config.get("context_length", 256)
+        run_inference(
+            model=model,
+            device=device,
+            prompt=args.prompt,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            context_size=context_size
+        )
+        return  # Exit after inference
+    
+    # Initialize optimizer (only needed for training)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1)
 
     # Load checkpoint if resuming
