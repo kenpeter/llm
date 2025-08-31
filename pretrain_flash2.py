@@ -679,10 +679,10 @@ def get_device(low_power_mode=False):
 
         if low_power_mode:
             # Conservative memory usage for cooler operation
-            torch.cuda.set_per_process_memory_fraction(0.9)  # Use 60% of GPU memory
+            torch.cuda.set_per_process_memory_fraction(1.0)  # Use 60% of GPU memory
             print("🔋 Low power mode: Using 60% GPU memory for cooler operation")
         else:
-            torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
+            torch.cuda.set_per_process_memory_fraction(1.0)  # Use 90% of GPU memory
 
         print(
             f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB"
