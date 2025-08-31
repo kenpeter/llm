@@ -694,6 +694,7 @@ def train_epoch(
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
+            # global step is model run step so far
             global_step += 1
 
             # Print progress with both train and validation loss every log_interval steps
@@ -861,7 +862,7 @@ def main():
     parser.add_argument(
         "--save-every",
         type=int,
-        default=20,
+        default=5,
         help="Save checkpoint every N epochs (default: 5)",
     )
     parser.add_argument(
@@ -1111,6 +1112,7 @@ def main():
     print(f"\nStarting training from epoch {start_epoch}...")
     print("=" * 60)
 
+    # global step start zero
     global_step = 0
     tokenizer = tiktoken.get_encoding("gpt2")
 

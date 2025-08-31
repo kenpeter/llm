@@ -9,6 +9,7 @@ import tiktoken
 from datetime import datetime
 from datasets import load_dataset
 import random
+import math
 
 
 #####################################
@@ -521,6 +522,18 @@ GPT_CONFIG = {
 #####################################
 
 
+def find_highest_gradient(model):
+    """Find the highest gradient value in the model parameters"""
+    max_grad = None
+    for param in model.parameters():
+        if param.grad is not None:
+            grad_values = param.grad.data.flatten()
+            max_grad_param = grad_values.max()
+            if max_grad is None or max_grad_param > max_grad:
+                max_grad = max_grad_param
+    return max_grad
+
+
 def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0.8):
     # idx is (B, T) array of indices in the current context
     for _ in range(max_new_tokens):
@@ -612,6 +625,49 @@ def calc_loss_loader(data_loader, model, device, num_batches=None):
             break
     # Return average loss across all processed batches
     return total_loss / num_batches
+
+
+#####################################
+# Learning Rate Scheduler
+#####################################
+
+
+class CosineDecayWithWarmup:
+    def __init__(
+        self, optimizer, warmup_steps, total_steps, peak_lr, min_lr, initial_lr
+    ):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.peak_lr = peak_lr
+        self.min_lr = min_lr
+        self.initial_lr = initial_lr
+        self.current_step = 0
+
+    def step(self):
+        # interesting, slow -> fast -> slow
+        if self.current_step < self.warmup_steps:
+            # Linear warmup
+            lr_increment = (self.peak_lr - self.initial_lr) / self.warmup_steps
+            lr = self.initial_lr + self.current_step * lr_increment
+        else:
+            # Cosine annealing after warmup
+            progress = (self.current_step - self.warmup_steps) / (
+                self.total_steps - self.warmup_steps
+            )
+            lr = self.min_lr + (self.peak_lr - self.min_lr) * 0.5 * (
+                1 + math.cos(math.pi * progress)
+            )
+
+        # Apply the calculated learning rate to all parameter groups
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = lr
+
+        self.current_step += 1
+        return lr
+
+    def get_last_lr(self):
+        return [param_group["lr"] for param_group in self.optimizer.param_groups]
 
 
 #####################################
@@ -751,6 +807,8 @@ def train_epoch(
     start_context_param="Who are you?",
     temperature=0.8,
     max_batches=None,
+    grad_clip=1.0,
+    lr_scheduler=None,
 ):
     """
     Train model for one epoch with gradient accumulation and periodic validation
@@ -761,6 +819,7 @@ def train_epoch(
     num_batches = max_batches if max_batches else float("inf")  # Handle streaming
     optimizer.zero_grad()
     batch_idx = 0  # Initialize batch_idx
+    last_grad_norm = 0.0  # Track gradient norm for logging
 
     # in single epoch, we have input batch and target batch
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
@@ -784,10 +843,18 @@ def train_epoch(
         if (batch_idx + 1) % accumulation_steps == 0 or (
             max_batches and batch_idx == max_batches - 1
         ):
+            # Get gradient norm before clipping for monitoring
+            grad_norm_before = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float("inf")
+            )
+            last_grad_norm = grad_norm_before.item()  # Store for logging
             # gradient clip to prevent too much
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
             # update gradient
             optimizer.step()
+            # update learning rate if scheduler is provided
+            if lr_scheduler is not None:
+                current_lr = lr_scheduler.step()
             # now clean them up
             optimizer.zero_grad()
             # global step  done
@@ -851,8 +918,15 @@ def train_epoch(
 
                 model.train()
 
+                # Get current learning rate
+                current_lr = (
+                    lr_scheduler.get_last_lr()[0]
+                    if lr_scheduler
+                    else optimizer.param_groups[0]["lr"]
+                )
+
                 print(
-                    f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}"
+                    f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f}, lr {current_lr:.2e}, grad_norm {last_grad_norm:.4f} | {start_context}{new_tokens}"
                 )
 
         # Break if we've reached max_batches for streaming datasets
@@ -1042,7 +1116,31 @@ def main():
         "--lr",
         type=float,
         default=1e-4,
-        help="Learning rate for AdamW optimizer (default: 1e-4)",
+        help="Initial learning rate for AdamW optimizer (default: 1e-4)",
+    )
+    parser.add_argument(
+        "--peak-lr",
+        type=float,
+        default=5e-4,
+        help="Peak learning rate after warmup (default: 5e-4)",
+    )
+    parser.add_argument(
+        "--min-lr",
+        type=float,
+        default=1e-6,
+        help="Minimum learning rate for cosine decay (default: 1e-6)",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2000,
+        help="Number of warmup steps for learning rate (default: 2000)",
+    )
+    parser.add_argument(
+        "--grad-clip",
+        type=float,
+        default=1.0,
+        help="Gradient clipping max norm (default: 1.0)",
     )
     parser.add_argument(
         "--batch-size",
@@ -1059,7 +1157,7 @@ def main():
     parser.add_argument(
         "--save-every",
         type=int,
-        default=20,
+        default=5,
         help="Save checkpoint every N epochs (default: 5)",
     )
     parser.add_argument(
@@ -1143,7 +1241,11 @@ def main():
         print(f"Additional epochs: +{args.additional_epochs}")
     else:
         print(f"Target epochs: {args.epochs}")
-    print(f"Learning rate: {args.lr}")
+    print(f"Initial learning rate: {args.lr}")
+    print(f"Peak learning rate: {args.peak_lr}")
+    print(f"Min learning rate: {args.min_lr}")
+    print(f"Warmup steps: {args.warmup_steps}")
+    print(f"Gradient clipping: {args.grad_clip}")
     print(f"Micro batch size: {args.batch_size}")
     print(f"Gradient accumulation steps: {accumulation_steps}")
     print(f"Effective batch size: {effective_batch_size}")
@@ -1191,9 +1293,7 @@ def main():
 
     # train from beginning of dataset
     random_skip = 0
-    print(
-        f"📚 Training will start from beginning: skipping {random_skip} samples"
-    )
+    print(f"📚 Training will start from beginning: skipping {random_skip} samples")
 
     # Create main training dataloader (streams entire dataset)
     train_loader = create_openwebtext_dataloader(
@@ -1270,9 +1370,26 @@ def main():
     else:
         target_epochs = args.epochs
 
-    # Add cosine annealing learning rate scheduler after target_epochs is defined
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=target_epochs, eta_min=1e-6
+    # Calculate total training steps for cosine decay
+    total_training_steps = target_epochs * args.batches_per_epoch // accumulation_steps
+
+    # Add cosine decay with warmup learning rate scheduler
+    lr_scheduler = CosineDecayWithWarmup(
+        optimizer=optimizer,
+        warmup_steps=args.warmup_steps,
+        total_steps=total_training_steps,
+        peak_lr=args.peak_lr,
+        min_lr=args.min_lr,
+        initial_lr=args.lr,
+    )
+
+    print(f"\nLearning Rate Schedule:")
+    print(f"  Total training steps: {total_training_steps:,}")
+    print(
+        f"  Warmup: {args.lr:.2e} → {args.peak_lr:.2e} over {args.warmup_steps} steps"
+    )
+    print(
+        f"  Cosine decay: {args.peak_lr:.2e} → {args.min_lr:.2e} over remaining steps"
     )
 
     # Training loop with early stopping
@@ -1298,14 +1415,17 @@ def main():
             args.start_context,
             args.temperature,
             args.batches_per_epoch,
+            args.grad_clip,
+            lr_scheduler,
         )
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
 
-        # Print epoch summary in requested format
+        # Print epoch summary with current learning rate
+        current_lr = lr_scheduler.get_last_lr()[0]
         print(
-            f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}"
+            f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}, lr {current_lr:.2e}"
         )
 
         # Generate sample text to verify model performance
@@ -1354,8 +1474,7 @@ def main():
                 print(f"Best validation loss: {best_val_loss:.4f}")
                 break
 
-        # Step learning rate scheduler
-        scheduler.step()
+        # Note: LR scheduler steps are handled in train_epoch per batch
 
         # Save checkpoint periodically
         if (epoch + 1) % args.save_every == 0:
