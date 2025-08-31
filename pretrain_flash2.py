@@ -17,6 +17,9 @@ import math
 #####################################
 
 
+# python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --resume checkpoints/latest_checkpoint.pt --peak-lr 8e-4
+
+
 # text to token id OR token id to text
 class GPTDatasetV1(Dataset):
     def __init__(self, txt, tokenizer, max_length, stride):
@@ -676,7 +679,7 @@ class CosineDecayWithWarmup:
 
 
 # get device
-def get_device():
+def get_device(low_power_mode=False):
     """
     Detect and return the best available device (CUDA, MPS, or CPU)
     """
@@ -685,7 +688,14 @@ def get_device():
         print(f"Using CUDA device: {torch.cuda.get_device_name()}")
         # Clear cache and set memory fraction
         torch.cuda.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
+        
+        if low_power_mode:
+            # Conservative memory usage for cooler operation
+            torch.cuda.set_per_process_memory_fraction(0.6)  # Use 60% of GPU memory
+            print("🔋 Low power mode: Using 60% GPU memory for cooler operation")
+        else:
+            torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
+            
         print(
             f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB"
         )
@@ -809,6 +819,7 @@ def train_epoch(
     max_batches=None,
     grad_clip=1.0,
     lr_scheduler=None,
+    scaler=None,
 ):
     """
     Train model for one epoch with gradient accumulation and periodic validation
@@ -826,15 +837,26 @@ def train_epoch(
         input_batch = input_batch.to(device)
         target_batch = target_batch.to(device)
 
-        logits = model(input_batch)
-        loss = torch.nn.functional.cross_entropy(
-            logits.flatten(0, 1), target_batch.flatten()
-        )
-
-        # Scale loss by accumulation steps for backward pass
-        scaled_loss = loss / accumulation_steps
-        # cal gradient val
-        scaled_loss.backward()
+        # Use mixed precision if enabled
+        if scaler is not None:
+            with torch.cuda.amp.autocast():
+                logits = model(input_batch)
+                loss = torch.nn.functional.cross_entropy(
+                    logits.flatten(0, 1), target_batch.flatten()
+                )
+            # Scale loss by accumulation steps for backward pass
+            scaled_loss = loss / accumulation_steps
+            # cal gradient val with scaler
+            scaler.scale(scaled_loss).backward()
+        else:
+            logits = model(input_batch)
+            loss = torch.nn.functional.cross_entropy(
+                logits.flatten(0, 1), target_batch.flatten()
+            )
+            # Scale loss by accumulation steps for backward pass
+            scaled_loss = loss / accumulation_steps
+            # cal gradient val
+            scaled_loss.backward()
 
         # so the loss just acc
         total_loss += loss.item()
@@ -843,15 +865,31 @@ def train_epoch(
         if (batch_idx + 1) % accumulation_steps == 0 or (
             max_batches and batch_idx == max_batches - 1
         ):
-            # Get gradient norm before clipping for monitoring
-            grad_norm_before = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=float("inf")
-            )
-            last_grad_norm = grad_norm_before.item()  # Store for logging
-            # gradient clip to prevent too much
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-            # update gradient
-            optimizer.step()
+            # Handle gradient clipping and optimization with mixed precision
+            if scaler is not None:
+                # Unscale gradients for clipping
+                scaler.unscale_(optimizer)
+                # Get gradient norm before clipping
+                grad_norm_before = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=float("inf")
+                )
+                last_grad_norm = grad_norm_before.item()
+                # Clip gradients
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+                # Update with scaler
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Get gradient norm before clipping for monitoring
+                grad_norm_before = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=float("inf")
+                )
+                last_grad_norm = grad_norm_before.item()  # Store for logging
+                # gradient clip to prevent too much
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+                # update gradient
+                optimizer.step()
+            
             # update learning rate if scheduler is provided
             if lr_scheduler is not None:
                 current_lr = lr_scheduler.step()
@@ -1143,6 +1181,16 @@ def main():
         help="Gradient clipping max norm (default: 1.0)",
     )
     parser.add_argument(
+        "--low-power",
+        action="store_true",
+        help="Enable low power mode for cooler GPU operation",
+    )
+    parser.add_argument(
+        "--mixed-precision",
+        action="store_true",
+        help="Enable mixed precision training (faster, less memory)",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=2,
@@ -1247,6 +1295,10 @@ def main():
     print(f"Min learning rate: {args.min_lr}")
     print(f"Warmup steps: {args.warmup_steps}")
     print(f"Gradient clipping: {args.grad_clip}")
+    if args.low_power:
+        print("🔋 Low power mode enabled")
+    if args.mixed_precision:
+        print("⚡ Mixed precision enabled")
     print(f"Micro batch size: {args.batch_size}")
     print(f"Gradient accumulation steps: {accumulation_steps}")
     print(f"Effective batch size: {effective_batch_size}")
@@ -1278,8 +1330,8 @@ def main():
             f"⚠️  Temperature {args.temperature} is very high - text may be incoherent"
         )
 
-    # Get device
-    device = get_device()
+    # Get device with power management
+    device = get_device(low_power_mode=args.low_power)
 
     # Load large-scale web text streaming dataset
     print("\n🚀 Setting up large-scale web text streaming dataset...")
@@ -1338,7 +1390,13 @@ def main():
         lr=args.lr,
         weight_decay=0.01,  # Lower weight decay for larger model
         betas=(0.9, 0.95),  # Better beta values for language modeling
+        eps=1e-8,  # Stable epsilon for mixed precision
     )
+    
+    # Initialize mixed precision scaler if enabled
+    scaler = torch.amp.GradScaler('cuda') if args.mixed_precision and torch.cuda.is_available() else None
+    if scaler:
+        print("✅ Mixed precision training enabled for efficiency")
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -1418,6 +1476,7 @@ def main():
             args.batches_per_epoch,
             args.grad_clip,
             lr_scheduler,
+            scaler,
         )
 
         # Evaluate
