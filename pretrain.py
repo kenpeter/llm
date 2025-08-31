@@ -273,18 +273,23 @@ GPT_CONFIG_124M = {
 def assign(left, right):
     if left.shape != right.shape:
         raise ValueError(f"Shape mismatch. Left: {left.shape}, Right: {right.shape}")
-    # why this assign weight
-    return torch.nn.Parameter(torch.tensor(right))
+    # Convert to Parameter properly to avoid warnings
+    if isinstance(right, torch.Tensor):
+        return torch.nn.Parameter(right.detach().clone())
+    else:
+        return torch.nn.Parameter(torch.tensor(right))
 
 # load weight into gpt - this weight file is already in our model format!
 def load_weights_into_gpt(gpt, params):
     # Direct mapping since weights are already in our model's format
     print("Loading embeddings...")
-    # Slice positional embeddings to match model's context length
+    # own model context len
     model_context_len = gpt.pos_emb.weight.shape[0]
+    # param has posi embed weight, with content len
     pretrained_pos_emb = params['pos_emb.weight'][:model_context_len]
+    # posi embed weight
     gpt.pos_emb.weight = assign(gpt.pos_emb.weight, pretrained_pos_emb)
-    
+    # token embed weight
     gpt.tok_emb.weight = assign(gpt.tok_emb.weight, params['tok_emb.weight'])
     
     print(f"Loading {len([k for k in params.keys() if k.startswith('trf_blocks')])} transformer blocks...")
@@ -292,7 +297,7 @@ def load_weights_into_gpt(gpt, params):
     num_blocks = len(gpt.trf_blocks)
     
     for b in range(num_blocks):
-        # Load attention weights - already split into Q/K/V
+        # q weight and bias
         gpt.trf_blocks[b].att.W_query.weight = assign(
             gpt.trf_blocks[b].att.W_query.weight, 
             params[f'trf_blocks.{b}.att.W_query.weight'])
@@ -300,13 +305,15 @@ def load_weights_into_gpt(gpt, params):
             gpt.trf_blocks[b].att.W_query.bias, 
             params[f'trf_blocks.{b}.att.W_query.bias'])
             
+        # key weight and bias
         gpt.trf_blocks[b].att.W_key.weight = assign(
             gpt.trf_blocks[b].att.W_key.weight, 
             params[f'trf_blocks.{b}.att.W_key.weight'])
         gpt.trf_blocks[b].att.W_key.bias = assign(
             gpt.trf_blocks[b].att.W_key.bias, 
             params[f'trf_blocks.{b}.att.W_key.bias'])
-            
+        
+        # value weight and bias
         gpt.trf_blocks[b].att.W_value.weight = assign(
             gpt.trf_blocks[b].att.W_value.weight, 
             params[f'trf_blocks.{b}.att.W_value.weight'])
@@ -314,7 +321,7 @@ def load_weights_into_gpt(gpt, params):
             gpt.trf_blocks[b].att.W_value.bias, 
             params[f'trf_blocks.{b}.att.W_value.bias'])
 
-        # Load attention output projection
+        # project weight and bias
         gpt.trf_blocks[b].att.out_proj.weight = assign(
             gpt.trf_blocks[b].att.out_proj.weight, 
             params[f'trf_blocks.{b}.att.out_proj.weight'])
@@ -322,13 +329,14 @@ def load_weights_into_gpt(gpt, params):
             gpt.trf_blocks[b].att.out_proj.bias, 
             params[f'trf_blocks.{b}.att.out_proj.bias'])
 
-        # Load feedforward layers
+        # feed forward weight
         gpt.trf_blocks[b].ff.layers[0].weight = assign(
             gpt.trf_blocks[b].ff.layers[0].weight, 
             params[f'trf_blocks.{b}.ff.layers.0.weight'])
         gpt.trf_blocks[b].ff.layers[0].bias = assign(
             gpt.trf_blocks[b].ff.layers[0].bias, 
             params[f'trf_blocks.{b}.ff.layers.0.bias'])
+        
         gpt.trf_blocks[b].ff.layers[2].weight = assign(
             gpt.trf_blocks[b].ff.layers[2].weight, 
             params[f'trf_blocks.{b}.ff.layers.2.weight'])
@@ -336,7 +344,7 @@ def load_weights_into_gpt(gpt, params):
             gpt.trf_blocks[b].ff.layers[2].bias, 
             params[f'trf_blocks.{b}.ff.layers.2.bias'])
 
-        # Load layer normalization
+        # layer normalize
         gpt.trf_blocks[b].norm1.scale = assign(
             gpt.trf_blocks[b].norm1.scale, 
             params[f'trf_blocks.{b}.norm1.scale'])
@@ -519,8 +527,9 @@ def get_device():
         torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB")
     elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("Using Apple Metal Performance Shaders (MPS)")
+        # MPS has precision issues with this model - use CPU for now
+        device = torch.device("cpu")
+        print("⚠️  MPS detected but using CPU due to precision issues")
     else:
         device = torch.device("cpu")
         print("Using CPU")
@@ -721,6 +730,11 @@ def run_inference(model, device, prompt, max_tokens=50, temperature=0.8, context
             context_size=context_size,
             temperature=temperature
         )
+    
+    # Debug: check token IDs
+    print(f"Debug - Generated token IDs: {generated_ids[0].tolist()[:10]}...")  # First 10 tokens
+    print(f"Debug - Token ID range: {generated_ids.min().item()} to {generated_ids.max().item()}")
+    print(f"Debug - Vocab size: {tokenizer.n_vocab}")
     
     # Decode the generated text
     generated_text = token_ids_to_text(generated_ids, tokenizer)

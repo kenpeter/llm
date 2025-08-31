@@ -10,6 +10,8 @@ Going down
 python pretrain.py --load-pretrained "gpt2-xl (1558M)"
 
 
+python pretrain.py --load-pretrained "gpt2-xl (1558M)" --inference --prompt
+
    
    
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
