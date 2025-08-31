@@ -512,7 +512,7 @@ GPT_CONFIG = {
     "emb_dim": 896,  # Smaller embedding (~150M parameters)
     "n_heads": 14,  # More attention heads (divisible by 896)
     "n_layers": 18,  # Deeper than original
-    "drop_rate": 0.1,  # Lower dropout for larger model
+    "drop_rate": 0.05,  # Lower dropout for faster convergence
     "qkv_bias": False,  # Query-key-value bias
 }
 
@@ -1148,6 +1148,7 @@ def main():
         default=2,
         help="Micro batch size for training (default: 2)",
     )
+    # batch-size = 4 (each time fit to GPU), then effective batch size = 256 (total), 256/4 = 64 steps
     parser.add_argument(
         "--effective-batch-size",
         type=int,

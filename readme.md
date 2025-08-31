@@ -17,10 +17,7 @@ python pretrain.py --load-pretrained "gpt2-xl (1558M)" --inference --prompt
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
-  python pretrain_flash2.py --batch-size 1 --effective-batch-size 8 --resume checkpoints/latest_checkpoint.pt
-
-
-
+python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --resume checkpoints/latest_checkpoint.pt --peak-lr 8e-4
 
 
 
