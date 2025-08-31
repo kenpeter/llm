@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 import tiktoken
 from datetime import datetime
 import urllib.request
+import numpy as np
 
 
 #####################################
@@ -239,6 +240,20 @@ class GPTModel(nn.Module):
 # Configuration
 #####################################
 
+BASE_CONFIG = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "drop_rate": 0.0,
+    "qkv_bias": True
+}
+
+model_configs = {
+    "gpt2-small (124M)": {"emb_dim": 768, "n_layers": 12, "n_heads": 12},
+    "gpt2-medium (355M)": {"emb_dim": 1024, "n_layers": 24, "n_heads": 16},
+    "gpt2-large (774M)": {"emb_dim": 1280, "n_layers": 36, "n_heads": 20},
+    "gpt2-xl (1558M)": {"emb_dim": 1600, "n_layers": 48, "n_heads": 25},
+}
+
 GPT_CONFIG_124M = {
     "vocab_size": 50257,  # Vocabulary size
     "context_length": 256,  # Shortened context length (orig: 1024)
@@ -249,6 +264,150 @@ GPT_CONFIG_124M = {
     "qkv_bias": False,  # Query-key-value bias
 }
 
+
+#####################################
+# Pretrained Weight Loading
+#####################################
+
+# if shape not match, err
+def assign(left, right):
+    if left.shape != right.shape:
+        raise ValueError(f"Shape mismatch. Left: {left.shape}, Right: {right.shape}")
+    # why this assign weight
+    return torch.nn.Parameter(torch.tensor(right))
+
+# load weight into gpt - this weight file is already in our model format!
+def load_weights_into_gpt(gpt, params):
+    # Direct mapping since weights are already in our model's format
+    print("Loading embeddings...")
+    # Slice positional embeddings to match model's context length
+    model_context_len = gpt.pos_emb.weight.shape[0]
+    pretrained_pos_emb = params['pos_emb.weight'][:model_context_len]
+    gpt.pos_emb.weight = assign(gpt.pos_emb.weight, pretrained_pos_emb)
+    
+    gpt.tok_emb.weight = assign(gpt.tok_emb.weight, params['tok_emb.weight'])
+    
+    print(f"Loading {len([k for k in params.keys() if k.startswith('trf_blocks')])} transformer blocks...")
+    # Get number of transformer blocks from the model
+    num_blocks = len(gpt.trf_blocks)
+    
+    for b in range(num_blocks):
+        # Load attention weights - already split into Q/K/V
+        gpt.trf_blocks[b].att.W_query.weight = assign(
+            gpt.trf_blocks[b].att.W_query.weight, 
+            params[f'trf_blocks.{b}.att.W_query.weight'])
+        gpt.trf_blocks[b].att.W_query.bias = assign(
+            gpt.trf_blocks[b].att.W_query.bias, 
+            params[f'trf_blocks.{b}.att.W_query.bias'])
+            
+        gpt.trf_blocks[b].att.W_key.weight = assign(
+            gpt.trf_blocks[b].att.W_key.weight, 
+            params[f'trf_blocks.{b}.att.W_key.weight'])
+        gpt.trf_blocks[b].att.W_key.bias = assign(
+            gpt.trf_blocks[b].att.W_key.bias, 
+            params[f'trf_blocks.{b}.att.W_key.bias'])
+            
+        gpt.trf_blocks[b].att.W_value.weight = assign(
+            gpt.trf_blocks[b].att.W_value.weight, 
+            params[f'trf_blocks.{b}.att.W_value.weight'])
+        gpt.trf_blocks[b].att.W_value.bias = assign(
+            gpt.trf_blocks[b].att.W_value.bias, 
+            params[f'trf_blocks.{b}.att.W_value.bias'])
+
+        # Load attention output projection
+        gpt.trf_blocks[b].att.out_proj.weight = assign(
+            gpt.trf_blocks[b].att.out_proj.weight, 
+            params[f'trf_blocks.{b}.att.out_proj.weight'])
+        gpt.trf_blocks[b].att.out_proj.bias = assign(
+            gpt.trf_blocks[b].att.out_proj.bias, 
+            params[f'trf_blocks.{b}.att.out_proj.bias'])
+
+        # Load feedforward layers
+        gpt.trf_blocks[b].ff.layers[0].weight = assign(
+            gpt.trf_blocks[b].ff.layers[0].weight, 
+            params[f'trf_blocks.{b}.ff.layers.0.weight'])
+        gpt.trf_blocks[b].ff.layers[0].bias = assign(
+            gpt.trf_blocks[b].ff.layers[0].bias, 
+            params[f'trf_blocks.{b}.ff.layers.0.bias'])
+        gpt.trf_blocks[b].ff.layers[2].weight = assign(
+            gpt.trf_blocks[b].ff.layers[2].weight, 
+            params[f'trf_blocks.{b}.ff.layers.2.weight'])
+        gpt.trf_blocks[b].ff.layers[2].bias = assign(
+            gpt.trf_blocks[b].ff.layers[2].bias, 
+            params[f'trf_blocks.{b}.ff.layers.2.bias'])
+
+        # Load layer normalization
+        gpt.trf_blocks[b].norm1.scale = assign(
+            gpt.trf_blocks[b].norm1.scale, 
+            params[f'trf_blocks.{b}.norm1.scale'])
+        gpt.trf_blocks[b].norm1.shift = assign(
+            gpt.trf_blocks[b].norm1.shift, 
+            params[f'trf_blocks.{b}.norm1.shift'])
+        gpt.trf_blocks[b].norm2.scale = assign(
+            gpt.trf_blocks[b].norm2.scale, 
+            params[f'trf_blocks.{b}.norm2.scale'])
+        gpt.trf_blocks[b].norm2.shift = assign(
+            gpt.trf_blocks[b].norm2.shift, 
+            params[f'trf_blocks.{b}.norm2.shift'])
+
+    print("Loading final layers...")
+    # Load final layer normalization and output head
+    gpt.final_norm.scale = assign(gpt.final_norm.scale, params['final_norm.scale'])
+    gpt.final_norm.shift = assign(gpt.final_norm.shift, params['final_norm.shift'])
+    gpt.out_head.weight = assign(gpt.out_head.weight, params['out_head.weight'])
+
+def download_progress_hook(block_num, block_size, total_size):
+    """Progress hook for urllib.request.urlretrieve"""
+    if total_size > 0:
+        downloaded = block_num * block_size
+        percent = min(100.0, (downloaded / total_size) * 100.0)
+        mb_downloaded = downloaded / (1024 * 1024)
+        mb_total = total_size / (1024 * 1024)
+        
+        # Print progress with carriage return to overwrite same line
+        print(f"\rDownloading... {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end="", flush=True)
+        
+        # Print newline when complete
+        if percent >= 100.0:
+            print()
+
+# download weight to hugging face
+def download_and_load_gpt2_weights(model_size="gpt2-small (124M)", file_name=None):
+    # 4 diff pre weights
+    if file_name is None:
+        file_mapping = {
+            "gpt2-small (124M)": "gpt2-small-124M.pth",
+            "gpt2-medium (355M)": "gpt2-medium-355M.pth",
+            "gpt2-large (774M)": "gpt2-large-774M.pth",
+            "gpt2-xl (1558M)": "gpt2-xl-1558M.pth"
+        }
+        file_name = file_mapping[model_size]
+    
+    # url
+    url = f"https://huggingface.co/rasbt/gpt2-from-scratch-pytorch/resolve/main/{file_name}"
+    
+    # Check if file already exists and get its size
+    if os.path.exists(file_name):
+        file_size_mb = os.path.getsize(file_name) / (1024 * 1024)
+        print(f"Found existing {file_name} ({file_size_mb:.1f} MB) - skipping download")
+    else:
+        # url download
+        print(f"Starting download of {file_name} from HuggingFace...")
+        try:
+            urllib.request.urlretrieve(url, file_name, reporthook=download_progress_hook)
+            file_size_mb = os.path.getsize(file_name) / (1024 * 1024)
+            print(f"Download complete! Saved to {file_name} ({file_size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"Download failed: {e}")
+            if os.path.exists(file_name):
+                os.remove(file_name)  # Clean up partial download
+            raise
+    
+    print(f"Loading weights from {file_name}...")
+    # torch load we map to cpu first
+    weights = torch.load(file_name, map_location="cpu")
+    print("Weights loaded successfully!")
+    return weights
 
 #####################################
 # Utility Functions
@@ -610,6 +769,19 @@ def main():
         default=0.8,
         help="Temperature for text generation sampling (default: 0.8)",
     )
+    parser.add_argument(
+        "--load-pretrained",
+        type=str,
+        default=None,
+        choices=["gpt2-small (124M)", "gpt2-medium (355M)", "gpt2-large (774M)", "gpt2-xl (1558M)"],
+        help="Load pretrained GPT-2 weights (default: None)",
+    )
+    parser.add_argument(
+        "--pretrained-file",
+        type=str,
+        default=None,
+        help="Custom path to pretrained weights file (default: None)",
+    )
 
     args = parser.parse_args()
 
@@ -657,11 +829,14 @@ def main():
     print("Creating data loaders...")
     torch.manual_seed(123)
 
+    # Use consistent context length
+    context_length = 256
+
     train_loader = create_dataloader_v1(
         train_data,
         batch_size=args.batch_size,
-        max_length=GPT_CONFIG_124M["context_length"],
-        stride=GPT_CONFIG_124M["context_length"],
+        max_length=context_length,
+        stride=context_length,
         drop_last=True,
         shuffle=True,
         num_workers=0,
@@ -670,8 +845,8 @@ def main():
     val_loader = create_dataloader_v1(
         val_data,
         batch_size=args.batch_size,
-        max_length=GPT_CONFIG_124M["context_length"],
-        stride=GPT_CONFIG_124M["context_length"],
+        max_length=context_length,
+        stride=context_length,
         drop_last=False,
         shuffle=False,
         num_workers=0,
@@ -683,7 +858,32 @@ def main():
     # Initialize model
     print("\nInitializing model...")
     torch.manual_seed(123)
-    model = GPTModel(GPT_CONFIG_124M)
+    
+    # Choose configuration based on pretrained model if specified
+    if args.load_pretrained:
+        config = BASE_CONFIG.copy()
+        config.update(model_configs[args.load_pretrained])
+        config["context_length"] = 256  # Keep shorter context for training
+        config["drop_rate"] = 0.1  # Add dropout for fine-tuning
+        config["qkv_bias"] = True  # Match pretrained weights
+        print(f"Using {args.load_pretrained} configuration")
+    else:
+        config = GPT_CONFIG_124M
+        print("Using default configuration")
+    
+    model = GPTModel(config)
+    
+    # Load pretrained weights if specified
+    if args.load_pretrained:
+        print(f"Loading pretrained weights: {args.load_pretrained}")
+        # we download gpt2 weight and assign to var
+        pretrained_weights = download_and_load_gpt2_weights(
+            args.load_pretrained, args.pretrained_file
+        )
+        # model and weight there
+        load_weights_into_gpt(model, pretrained_weights)
+        print("Pretrained weights loaded successfully!")
+    
     model = model.to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
