@@ -224,8 +224,8 @@ def create_openwebtext_dataloader(
     max_length=256,
     # stride 128 slide win
     stride=128,
-    # zero worker
-    num_workers=0,
+    # use multiple workers for faster loading
+    num_workers=4,
     # this is token buffer
     buffer_size=1000,
     # skip samples to start from different position
@@ -253,6 +253,9 @@ def create_openwebtext_dataloader(
         dataset,
         batch_size=batch_size,
         num_workers=num_workers,  # Note: shuffle not applicable for streaming
+        pin_memory=True,  # Faster GPU transfer
+        persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
+        prefetch_factor=2 if num_workers > 0 else 2,  # Prefetch batches
     )
 
     return dataloader
@@ -575,7 +578,7 @@ def token_ids_to_text(token_ids, tokenizer):
 # val loss === cross entropy loss
 def calc_loss_batch(input_batch, target_batch, model, device):
     # by default most of things start in cpu, e.g. load file, torch.tensor, etc, so we need to move to GPU
-    input_batch, target_batch = input_batch.to(device), target_batch.to(device)
+    input_batch, target_batch = input_batch.to(device, non_blocking=True), target_batch.to(device, non_blocking=True)
     # use model's forward func to get logit
     logits = model(input_batch)
     # 1. input_batch: [1_b, 3_token_n]
@@ -816,14 +819,18 @@ def train_epoch(
     model.train()
     total_loss = 0.0
     num_batches = max_batches if max_batches else float("inf")  # Handle streaming
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)  # More memory efficient
     batch_idx = 0  # Initialize batch_idx
     last_grad_norm = 0.0  # Track gradient norm for logging
+    
+    # Enable optimized attention for better performance
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_math_sdp(False)  # Disable slower fallback
 
     # in single epoch, we have input batch and target batch
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
-        input_batch = input_batch.to(device)
-        target_batch = target_batch.to(device)
+        input_batch = input_batch.to(device, non_blocking=True)
+        target_batch = target_batch.to(device, non_blocking=True)
 
         # Use mixed precision if enabled
         if scaler is not None:
@@ -882,9 +889,13 @@ def train_epoch(
             if lr_scheduler is not None:
                 current_lr = lr_scheduler.step()
             # now clean them up
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # More memory efficient
             # global step  done
             global_step += 1
+            
+            # Periodic memory cleanup for better performance
+            if global_step % 100 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # at each log interval, we need to print out train loss and val loss
             if global_step % log_interval == 0:
@@ -899,24 +910,26 @@ def train_epoch(
                 val_samples = 0
                 # no grad update
                 with torch.no_grad():
-                    # loop val loader, so we get batch idx, input and target in val scope
-                    for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
-                        # only use first 5 batches
-                        if val_batch_idx >= 5:  # Only use first 5 batches for speed
-                            break
+                    # Use torch.inference_mode for better performance
+                    with torch.inference_mode():
+                        # loop val loader, so we get batch idx, input and target in val scope
+                        for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
+                            # only use first 3 batches for speed
+                            if val_batch_idx >= 3:  # Reduced from 5 to 3 for faster validation
+                                break
 
-                        # ok, so basically, val
-                        val_input, val_target = val_input.to(device), val_target.to(
-                            device
-                        )
+                            # ok, so basically, val
+                            val_input, val_target = val_input.to(device, non_blocking=True), val_target.to(
+                                device, non_blocking=True
+                            )
 
-                        # logit, cross entropy
-                        val_logits = model(val_input)
-                        val_batch_loss = torch.nn.functional.cross_entropy(
-                            val_logits.flatten(0, 1), val_target.flatten()
-                        )
-                        val_loss += val_batch_loss.item()
-                        val_samples += 1
+                            # logit, cross entropy
+                            val_logits = model(val_input)
+                            val_batch_loss = torch.nn.functional.cross_entropy(
+                                val_logits.flatten(0, 1), val_target.flatten()
+                            )
+                            val_loss += val_batch_loss.item()
+                            val_samples += 1
 
                 val_loss = val_loss / val_samples if val_samples > 0 else float("inf")
 
@@ -967,7 +980,7 @@ def train_epoch(
     return total_loss / actual_batches if actual_batches > 0 else 0.0, global_step
 
 
-def evaluate(model, val_loader, device, max_val_batches=100):
+def evaluate(model, val_loader, device, max_val_batches=50):
     """
     Evaluate model on validation set (limited batches for streaming)
     """
@@ -976,17 +989,18 @@ def evaluate(model, val_loader, device, max_val_batches=100):
     num_batches = 0
 
     with torch.no_grad():
-        for batch_idx, (input_batch, target_batch) in enumerate(val_loader):
-            if batch_idx >= max_val_batches:
-                break
+        with torch.inference_mode():  # Faster inference mode
+            for batch_idx, (input_batch, target_batch) in enumerate(val_loader):
+                if batch_idx >= max_val_batches:
+                    break
 
-            input_batch, target_batch = input_batch.to(device), target_batch.to(device)
-            logits = model(input_batch)
-            loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, 1), target_batch.flatten()
-            )
-            total_loss += loss.item()
-            num_batches += 1
+                input_batch, target_batch = input_batch.to(device, non_blocking=True), target_batch.to(device, non_blocking=True)
+                logits = model(input_batch)
+                loss = torch.nn.functional.cross_entropy(
+                    logits.flatten(0, 1), target_batch.flatten()
+                )
+                total_loss += loss.item()
+                num_batches += 1
 
     return total_loss / num_batches if num_batches > 0 else float("inf")
 
@@ -1206,14 +1220,14 @@ def main():
     parser.add_argument(
         "--batches-per-epoch",
         type=int,
-        default=50000,
-        help="Number of batches per epoch for streaming dataset (default: 50000)",
+        default=25000,
+        help="Number of batches per epoch for streaming dataset (default: 25000) - reduced for faster epochs",
     )
     parser.add_argument(
         "--log-interval",
         type=int,
-        default=25,
-        help="Log train/val loss every N steps (default: 25)",
+        default=50,
+        help="Log train/val loss every N steps (default: 50) - increased for faster training",
     )
     parser.add_argument(
         "--start-context",
@@ -1297,6 +1311,7 @@ def main():
     print(f"Log interval: {args.log_interval}")
     print(f"Temperature: {args.temperature}")
     print("📊 Training on large-scale web text dataset with streaming")
+    print("⚡ Optimizations enabled: faster data loading, reduced validation, torch.compile, memory management")
 
     if not FLASH_ATTN_AVAILABLE:
         print("\n📦 To install Flash Attention 2:")
@@ -1341,7 +1356,7 @@ def main():
         batch_size=args.batch_size,
         max_length=model_config["context_length"],
         stride=model_config["context_length"],
-        num_workers=0,
+        num_workers=4,  # Increased workers for faster loading
         skip_samples=random_skip,
     )
 
@@ -1354,7 +1369,7 @@ def main():
         batch_size=args.batch_size,
         max_length=model_config["context_length"],
         stride=model_config["context_length"],
-        num_workers=0,
+        num_workers=2,  # Use fewer workers for validation
         skip_samples=val_random_skip,
     )
 
@@ -1368,6 +1383,14 @@ def main():
     torch.manual_seed(123)
     model = GPTModel(model_config)
     model = model.to(device)
+    
+    # Enable torch.compile for faster training (PyTorch 2.0+)
+    try:
+        if hasattr(torch, 'compile'):
+            print("✅ Using torch.compile for faster training")
+            model = torch.compile(model, mode='max-autotune')
+    except Exception as e:
+        print(f"Warning: torch.compile failed: {e}")
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")

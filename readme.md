@@ -17,15 +17,32 @@ python pretrain.py --load-pretrained "gpt2-xl (1558M)" --inference --prompt
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
-  python pretrain_flash2.py --batch-size 1 --effective-batch-size 8 --resume checkpoints/latest_checkpoint.pt
 
 
- python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --resume checkpoints/latest_checkpoint.pt --low-power
-  --mixed-precision --peak-lr 1e-3
+
+● Here are the CLI commands to run the optimized training:
+
+  Basic training:
+  python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --peak-lr 8e-4
+
+  Training with mixed precision (faster):
+  python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --peak-lr 8e-4 --mixed-precision
+
+  Resume from checkpoint:
+  python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --resume checkpoints/latest_checkpoint.pt --peak-lr 8e-4
+
+  Low power mode (cooler GPU):
+  python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --peak-lr 8e-4 --low-power --mixed-precision
+
+  Inference mode:
+  python pretrain_flash2.py --mode inference --model-path checkpoints/latest_checkpoint.pt --prompt "Hello world"
+
+  Interactive inference:
+  python pretrain_flash2.py --mode inference --model-path checkpoints/latest_checkpoint.pt --interactive
+
+
 
   
-
-
 
  python -c "import torch; torch.cuda.empty_cache()"
 
