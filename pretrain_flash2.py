@@ -525,7 +525,6 @@ GPT_CONFIG = {
 #####################################
 
 
-
 def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0.8):
     # idx is (B, T) array of indices in the current context
     for _ in range(max_new_tokens):
@@ -677,14 +676,14 @@ def get_device(low_power_mode=False):
         print(f"Using CUDA device: {torch.cuda.get_device_name()}")
         # Clear cache and set memory fraction
         torch.cuda.empty_cache()
-        
+
         if low_power_mode:
             # Conservative memory usage for cooler operation
-            torch.cuda.set_per_process_memory_fraction(0.6)  # Use 60% of GPU memory
+            torch.cuda.set_per_process_memory_fraction(0.9)  # Use 60% of GPU memory
             print("🔋 Low power mode: Using 60% GPU memory for cooler operation")
         else:
             torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
-            
+
         print(
             f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB"
         )
@@ -878,7 +877,7 @@ def train_epoch(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
                 # update gradient
                 optimizer.step()
-            
+
             # update learning rate if scheduler is provided
             if lr_scheduler is not None:
                 current_lr = lr_scheduler.step()
@@ -1195,7 +1194,7 @@ def main():
     parser.add_argument(
         "--save-every",
         type=int,
-        default=5,
+        default=1,
         help="Save checkpoint every N epochs (default: 5)",
     )
     parser.add_argument(
@@ -1381,9 +1380,13 @@ def main():
         betas=(0.9, 0.95),  # Better beta values for language modeling
         eps=1e-8,  # Stable epsilon for mixed precision
     )
-    
+
     # Initialize mixed precision scaler if enabled
-    scaler = torch.cuda.amp.GradScaler() if args.mixed_precision and torch.cuda.is_available() else None
+    scaler = (
+        torch.cuda.amp.GradScaler()
+        if args.mixed_precision and torch.cuda.is_available()
+        else None
+    )
     if scaler:
         print("✅ Mixed precision training enabled for efficiency")
 
