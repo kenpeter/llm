@@ -220,6 +220,7 @@ class GPTModel(nn.Module):
             *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
         )
 
+        # final norm before out head
         self.final_norm = LayerNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
 
@@ -337,6 +338,7 @@ def load_weights_into_gpt(gpt, params):
             gpt.trf_blocks[b].ff.layers[0].bias, 
             params[f'trf_blocks.{b}.ff.layers.0.bias'])
         
+        # there is 1 gap here, GELU
         gpt.trf_blocks[b].ff.layers[2].weight = assign(
             gpt.trf_blocks[b].ff.layers[2].weight, 
             params[f'trf_blocks.{b}.ff.layers.2.weight'])
@@ -359,7 +361,9 @@ def load_weights_into_gpt(gpt, params):
             params[f'trf_blocks.{b}.norm2.shift'])
 
     print("Loading final layers...")
-    # Load final layer normalization and output head
+
+    # output = scale * normalized + shift
+    # norm is too strict, so need scale and shift
     gpt.final_norm.scale = assign(gpt.final_norm.scale, params['final_norm.scale'])
     gpt.final_norm.shift = assign(gpt.final_norm.shift, params['final_norm.shift'])
     gpt.out_head.weight = assign(gpt.out_head.weight, params['out_head.weight'])
