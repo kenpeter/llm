@@ -1090,7 +1090,7 @@ def main():
             best_val_loss = float("inf")
 
     # train loader return batch, because input batch and target batch
-    # batch * epoch = total step
+    # epoch * batch (N step) = total step
     total_steps = len(train_loader) * args.epochs
     # warm up step = some of total step
     warmup_steps = int(args.warmup_ratio * total_steps)
