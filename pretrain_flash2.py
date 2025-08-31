@@ -525,17 +525,6 @@ GPT_CONFIG = {
 #####################################
 
 
-def find_highest_gradient(model):
-    """Find the highest gradient value in the model parameters"""
-    max_grad = None
-    for param in model.parameters():
-        if param.grad is not None:
-            grad_values = param.grad.data.flatten()
-            max_grad_param = grad_values.max()
-            if max_grad is None or max_grad_param > max_grad:
-                max_grad = max_grad_param
-    return max_grad
-
 
 def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0.8):
     # idx is (B, T) array of indices in the current context
@@ -1394,7 +1383,7 @@ def main():
     )
     
     # Initialize mixed precision scaler if enabled
-    scaler = torch.amp.GradScaler('cuda') if args.mixed_precision and torch.cuda.is_available() else None
+    scaler = torch.cuda.amp.GradScaler() if args.mixed_precision and torch.cuda.is_available() else None
     if scaler:
         print("✅ Mixed precision training enabled for efficiency")
 
