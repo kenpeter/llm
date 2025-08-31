@@ -834,7 +834,7 @@ def train_epoch(
 
         # Use mixed precision if enabled
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logits = model(input_batch)
                 loss = torch.nn.functional.cross_entropy(
                     logits.flatten(0, 1), target_batch.flatten()
@@ -1388,7 +1388,8 @@ def main():
     try:
         if hasattr(torch, 'compile'):
             print("✅ Using torch.compile for faster training")
-            model = torch.compile(model, mode='max-autotune')
+            # Use reduce-overhead mode to avoid CUDA graphs issues with gradient accumulation
+            model = torch.compile(model, mode='reduce-overhead')
     except Exception as e:
         print(f"Warning: torch.compile failed: {e}")
 
@@ -1406,7 +1407,7 @@ def main():
 
     # Initialize mixed precision scaler if enabled
     scaler = (
-        torch.cuda.amp.GradScaler()
+        torch.amp.GradScaler('cuda')
         if args.mixed_precision and torch.cuda.is_available()
         else None
     )
