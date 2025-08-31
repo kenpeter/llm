@@ -245,7 +245,7 @@ BASE_CONFIG = {
     "vocab_size": 50257,
     "context_length": 1024,
     "drop_rate": 0.0,
-    "qkv_bias": True
+    "qkv_bias": True,
 }
 
 model_configs = {
@@ -270,6 +270,7 @@ GPT_CONFIG_124M = {
 # Pretrained Weight Loading
 #####################################
 
+
 # if shape not match, err
 def assign(left, right):
     if left.shape != right.shape:
@@ -280,6 +281,7 @@ def assign(left, right):
     else:
         return torch.nn.Parameter(torch.tensor(right))
 
+
 # load weight into gpt - this weight file is already in our model format!
 def load_weights_into_gpt(gpt, params):
     # Direct mapping since weights are already in our model's format
@@ -287,86 +289,100 @@ def load_weights_into_gpt(gpt, params):
     # own model context len
     model_context_len = gpt.pos_emb.weight.shape[0]
     # param has posi embed weight, with content len
-    pretrained_pos_emb = params['pos_emb.weight'][:model_context_len]
+    pretrained_pos_emb = params["pos_emb.weight"][:model_context_len]
     # posi embed weight
     gpt.pos_emb.weight = assign(gpt.pos_emb.weight, pretrained_pos_emb)
     # token embed weight
-    gpt.tok_emb.weight = assign(gpt.tok_emb.weight, params['tok_emb.weight'])
-    
-    print(f"Loading {len([k for k in params.keys() if k.startswith('trf_blocks')])} transformer blocks...")
+    gpt.tok_emb.weight = assign(gpt.tok_emb.weight, params["tok_emb.weight"])
+
+    print(
+        f"Loading {len([k for k in params.keys() if k.startswith('trf_blocks')])} transformer blocks..."
+    )
     # Get number of transformer blocks from the model
     num_blocks = len(gpt.trf_blocks)
-    
+
     for b in range(num_blocks):
         # q weight and bias
         gpt.trf_blocks[b].att.W_query.weight = assign(
-            gpt.trf_blocks[b].att.W_query.weight, 
-            params[f'trf_blocks.{b}.att.W_query.weight'])
+            gpt.trf_blocks[b].att.W_query.weight,
+            params[f"trf_blocks.{b}.att.W_query.weight"],
+        )
         gpt.trf_blocks[b].att.W_query.bias = assign(
-            gpt.trf_blocks[b].att.W_query.bias, 
-            params[f'trf_blocks.{b}.att.W_query.bias'])
-            
+            gpt.trf_blocks[b].att.W_query.bias,
+            params[f"trf_blocks.{b}.att.W_query.bias"],
+        )
+
         # key weight and bias
         gpt.trf_blocks[b].att.W_key.weight = assign(
-            gpt.trf_blocks[b].att.W_key.weight, 
-            params[f'trf_blocks.{b}.att.W_key.weight'])
+            gpt.trf_blocks[b].att.W_key.weight,
+            params[f"trf_blocks.{b}.att.W_key.weight"],
+        )
         gpt.trf_blocks[b].att.W_key.bias = assign(
-            gpt.trf_blocks[b].att.W_key.bias, 
-            params[f'trf_blocks.{b}.att.W_key.bias'])
-        
+            gpt.trf_blocks[b].att.W_key.bias, params[f"trf_blocks.{b}.att.W_key.bias"]
+        )
+
         # value weight and bias
         gpt.trf_blocks[b].att.W_value.weight = assign(
-            gpt.trf_blocks[b].att.W_value.weight, 
-            params[f'trf_blocks.{b}.att.W_value.weight'])
+            gpt.trf_blocks[b].att.W_value.weight,
+            params[f"trf_blocks.{b}.att.W_value.weight"],
+        )
         gpt.trf_blocks[b].att.W_value.bias = assign(
-            gpt.trf_blocks[b].att.W_value.bias, 
-            params[f'trf_blocks.{b}.att.W_value.bias'])
+            gpt.trf_blocks[b].att.W_value.bias,
+            params[f"trf_blocks.{b}.att.W_value.bias"],
+        )
 
         # project weight and bias
         gpt.trf_blocks[b].att.out_proj.weight = assign(
-            gpt.trf_blocks[b].att.out_proj.weight, 
-            params[f'trf_blocks.{b}.att.out_proj.weight'])
+            gpt.trf_blocks[b].att.out_proj.weight,
+            params[f"trf_blocks.{b}.att.out_proj.weight"],
+        )
         gpt.trf_blocks[b].att.out_proj.bias = assign(
-            gpt.trf_blocks[b].att.out_proj.bias, 
-            params[f'trf_blocks.{b}.att.out_proj.bias'])
+            gpt.trf_blocks[b].att.out_proj.bias,
+            params[f"trf_blocks.{b}.att.out_proj.bias"],
+        )
 
         # feed forward weight
         gpt.trf_blocks[b].ff.layers[0].weight = assign(
-            gpt.trf_blocks[b].ff.layers[0].weight, 
-            params[f'trf_blocks.{b}.ff.layers.0.weight'])
+            gpt.trf_blocks[b].ff.layers[0].weight,
+            params[f"trf_blocks.{b}.ff.layers.0.weight"],
+        )
         gpt.trf_blocks[b].ff.layers[0].bias = assign(
-            gpt.trf_blocks[b].ff.layers[0].bias, 
-            params[f'trf_blocks.{b}.ff.layers.0.bias'])
-        
+            gpt.trf_blocks[b].ff.layers[0].bias,
+            params[f"trf_blocks.{b}.ff.layers.0.bias"],
+        )
+
         # there is 1 gap here, GELU
         gpt.trf_blocks[b].ff.layers[2].weight = assign(
-            gpt.trf_blocks[b].ff.layers[2].weight, 
-            params[f'trf_blocks.{b}.ff.layers.2.weight'])
+            gpt.trf_blocks[b].ff.layers[2].weight,
+            params[f"trf_blocks.{b}.ff.layers.2.weight"],
+        )
         gpt.trf_blocks[b].ff.layers[2].bias = assign(
-            gpt.trf_blocks[b].ff.layers[2].bias, 
-            params[f'trf_blocks.{b}.ff.layers.2.bias'])
+            gpt.trf_blocks[b].ff.layers[2].bias,
+            params[f"trf_blocks.{b}.ff.layers.2.bias"],
+        )
 
         # layer normalize
         gpt.trf_blocks[b].norm1.scale = assign(
-            gpt.trf_blocks[b].norm1.scale, 
-            params[f'trf_blocks.{b}.norm1.scale'])
+            gpt.trf_blocks[b].norm1.scale, params[f"trf_blocks.{b}.norm1.scale"]
+        )
         gpt.trf_blocks[b].norm1.shift = assign(
-            gpt.trf_blocks[b].norm1.shift, 
-            params[f'trf_blocks.{b}.norm1.shift'])
+            gpt.trf_blocks[b].norm1.shift, params[f"trf_blocks.{b}.norm1.shift"]
+        )
         gpt.trf_blocks[b].norm2.scale = assign(
-            gpt.trf_blocks[b].norm2.scale, 
-            params[f'trf_blocks.{b}.norm2.scale'])
+            gpt.trf_blocks[b].norm2.scale, params[f"trf_blocks.{b}.norm2.scale"]
+        )
         gpt.trf_blocks[b].norm2.shift = assign(
-            gpt.trf_blocks[b].norm2.shift, 
-            params[f'trf_blocks.{b}.norm2.shift'])
+            gpt.trf_blocks[b].norm2.shift, params[f"trf_blocks.{b}.norm2.shift"]
+        )
 
     print("Loading final layers...")
 
     # output = scale * normalized + shift
     # norm is too strict, so need scale and shift
-    gpt.final_norm.scale = assign(gpt.final_norm.scale, params['final_norm.scale'])
-    gpt.final_norm.shift = assign(gpt.final_norm.shift, params['final_norm.shift'])
-    gpt.out_head.weight = assign(gpt.out_head.weight, params['out_head.weight'])
+    gpt.final_norm.scale = assign(gpt.final_norm.scale, params["final_norm.scale"])
+    gpt.final_norm.shift = assign(gpt.final_norm.shift, params["final_norm.shift"])
+    gpt.out_head.weight = assign(gpt.out_head.weight, params["out_head.weight"])
+
 
 def download_progress_hook(block_num, block_size, total_size):
     """Progress hook for urllib.request.urlretrieve"""
@@ -375,13 +391,18 @@ def download_progress_hook(block_num, block_size, total_size):
         percent = min(100.0, (downloaded / total_size) * 100.0)
         mb_downloaded = downloaded / (1024 * 1024)
         mb_total = total_size / (1024 * 1024)
-        
+
         # Print progress with carriage return to overwrite same line
-        print(f"\rDownloading... {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end="", flush=True)
-        
+        print(
+            f"\rDownloading... {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)",
+            end="",
+            flush=True,
+        )
+
         # Print newline when complete
         if percent >= 100.0:
             print()
+
 
 # download weight to hugging face
 def download_and_load_gpt2_weights(model_size="gpt2-small (124M)", file_name=None):
@@ -391,13 +412,13 @@ def download_and_load_gpt2_weights(model_size="gpt2-small (124M)", file_name=Non
             "gpt2-small (124M)": "gpt2-small-124M.pth",
             "gpt2-medium (355M)": "gpt2-medium-355M.pth",
             "gpt2-large (774M)": "gpt2-large-774M.pth",
-            "gpt2-xl (1558M)": "gpt2-xl-1558M.pth"
+            "gpt2-xl (1558M)": "gpt2-xl-1558M.pth",
         }
         file_name = file_mapping[model_size]
-    
+
     # url
     url = f"https://huggingface.co/rasbt/gpt2-from-scratch-pytorch/resolve/main/{file_name}"
-    
+
     # Check if file already exists and get its size
     if os.path.exists(file_name):
         file_size_mb = os.path.getsize(file_name) / (1024 * 1024)
@@ -406,7 +427,9 @@ def download_and_load_gpt2_weights(model_size="gpt2-small (124M)", file_name=Non
         # url download
         print(f"Starting download of {file_name} from HuggingFace...")
         try:
-            urllib.request.urlretrieve(url, file_name, reporthook=download_progress_hook)
+            urllib.request.urlretrieve(
+                url, file_name, reporthook=download_progress_hook
+            )
             file_size_mb = os.path.getsize(file_name) / (1024 * 1024)
             print(f"Download complete! Saved to {file_name} ({file_size_mb:.1f} MB)")
         except Exception as e:
@@ -414,12 +437,13 @@ def download_and_load_gpt2_weights(model_size="gpt2-small (124M)", file_name=Non
             if os.path.exists(file_name):
                 os.remove(file_name)  # Clean up partial download
             raise
-    
+
     print(f"Loading weights from {file_name}...")
     # torch load we map to cpu first
     weights = torch.load(file_name, map_location="cpu")
     print("Weights loaded successfully!")
     return weights
+
 
 #####################################
 # Utility Functions
@@ -445,10 +469,10 @@ def generate_text_simple(model, idx, max_new_tokens, context_size, temperature=0
 
         # Apply temperature scaling
         logits = logits / temperature
-        
+
         # Convert to probabilities
         probs = torch.softmax(logits, dim=-1)  # (batch, vocab_size)
-        
+
         # Sample from the probability distribution
         idx_next = torch.multinomial(probs, num_samples=1)  # (batch, 1)
 
@@ -529,7 +553,9 @@ def get_device():
         # Clear cache and set memory fraction
         torch.cuda.empty_cache()
         torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB")
+        print(
+            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory // 1024**3} GB"
+        )
     elif torch.backends.mps.is_available():
         # MPS has precision issues with this model - use CPU for now
         device = torch.device("cpu")
@@ -611,7 +637,23 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device="cpu"):
     return model, optimizer, start_epoch, best_loss
 
 
-def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, global_step, accumulation_steps=8, log_interval=25, start_context_param="Who are you?", temperature=0.8):
+def train_epoch(
+    model,
+    train_loader,
+    val_loader,
+    optimizer,
+    device,
+    epoch,
+    global_step,
+    accumulation_steps=8,
+    log_interval=25,
+    start_context_param="Who are you?",
+    temperature=0.8,
+    warmup_steps=0,
+    initial_lr=1e-4,
+    peak_lr=5e-5,
+    lr_increment=0,
+):
     """
     Train model for one epoch with gradient accumulation and periodic validation
     """
@@ -628,7 +670,7 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
         loss = torch.nn.functional.cross_entropy(
             logits.flatten(0, 1), target_batch.flatten()
         )
-        
+
         # Scale loss by accumulation steps for backward pass
         scaled_loss = loss / accumulation_steps
         scaled_loss.backward()
@@ -638,6 +680,16 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
 
         # Update weights every accumulation_steps batches
         if (batch_idx + 1) % accumulation_steps == 0 or batch_idx == num_batches - 1:
+            # Apply learning rate warmup
+            if global_step < warmup_steps:
+                lr = initial_lr + global_step * lr_increment
+            else:
+                lr = peak_lr
+
+            # Apply the calculated learning rate to the optimizer
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
+
             # Gradient clipping to prevent explosion
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -647,7 +699,7 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
             # Print progress with both train and validation loss every log_interval steps
             if global_step % log_interval == 0:
                 current_train_loss = total_loss / (batch_idx + 1)
-                
+
                 # Quick validation loss calculation
                 model.eval()
                 val_loss = 0.0
@@ -656,21 +708,24 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
                     for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
                         if val_batch_idx >= 5:  # Only use first 5 batches for speed
                             break
-                        val_input, val_target = val_input.to(device), val_target.to(device)
+                        val_input, val_target = val_input.to(device), val_target.to(
+                            device
+                        )
                         val_logits = model(val_input)
                         val_batch_loss = torch.nn.functional.cross_entropy(
                             val_logits.flatten(0, 1), val_target.flatten()
                         )
                         val_loss += val_batch_loss.item()
                         val_samples += 1
-                
-                val_loss = val_loss / val_samples if val_samples > 0 else float('inf')
-                
+
+                val_loss = val_loss / val_samples if val_samples > 0 else float("inf")
+
                 # Generate sample text to show progress
                 import tiktoken
+
                 tokenizer = tiktoken.get_encoding("gpt2")
                 start_context = start_context_param
-                
+
                 try:
                     token_ids = text_to_token_ids(start_context, tokenizer).to(device)
                     with torch.no_grad():
@@ -679,17 +734,20 @@ def train_epoch(model, train_loader, val_loader, optimizer, device, epoch, globa
                             idx=token_ids,
                             max_new_tokens=8,
                             context_size=256,  # Use context length from config
-                            temperature=temperature
+                            temperature=temperature,
                         )
                     generated_text = token_ids_to_text(generated_ids, tokenizer)
                     # Extract only the new tokens (remove the original context)
-                    new_tokens = generated_text[len(start_context):].strip()
+                    new_tokens = generated_text[len(start_context) :].strip()
                 except:
                     new_tokens = "[generation failed]"
-                
+
                 model.train()
-                
-                print(f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f} | {start_context}{new_tokens}")
+
+                current_lr = optimizer.param_groups[0]["lr"]
+                print(
+                    f"ep {epoch} (step {global_step}): train loss {current_train_loss:.4f}, val loss {val_loss:.4f}, lr {current_lr:.6f} | {start_context}{new_tokens}"
+                )
 
     return total_loss / num_batches, global_step
 
@@ -707,24 +765,27 @@ def evaluate(model, val_loader, device):
     return total_loss
 
 
-def run_inference(model, device, prompt, max_tokens=50, temperature=0.8, context_size=256):
+def run_inference(
+    model, device, prompt, max_tokens=50, temperature=0.8, context_size=256
+):
     """
     Run inference with the model to generate text from a prompt
     """
     import tiktoken
+
     tokenizer = tiktoken.get_encoding("gpt2")
-    
+
     print(f"🤖 GPT Inference Mode")
     print(f"Prompt: '{prompt}'")
     print(f"Max tokens: {max_tokens}")
     print(f"Temperature: {temperature}")
     print("-" * 50)
-    
+
     model.eval()
-    
+
     # Encode the prompt
     token_ids = text_to_token_ids(prompt, tokenizer).to(device)
-    
+
     # Generate text
     with torch.no_grad():
         generated_ids = generate_text_simple(
@@ -732,25 +793,29 @@ def run_inference(model, device, prompt, max_tokens=50, temperature=0.8, context
             idx=token_ids,
             max_new_tokens=max_tokens,
             context_size=context_size,
-            temperature=temperature
+            temperature=temperature,
         )
-    
+
     # Debug: check token IDs
-    print(f"Debug - Generated token IDs: {generated_ids[0].tolist()[:10]}...")  # First 10 tokens
-    print(f"Debug - Token ID range: {generated_ids.min().item()} to {generated_ids.max().item()}")
+    print(
+        f"Debug - Generated token IDs: {generated_ids[0].tolist()[:10]}..."
+    )  # First 10 tokens
+    print(
+        f"Debug - Token ID range: {generated_ids.min().item()} to {generated_ids.max().item()}"
+    )
     print(f"Debug - Vocab size: {tokenizer.n_vocab}")
-    
+
     # Decode the generated text
     generated_text = token_ids_to_text(generated_ids, tokenizer)
-    
+
     # Extract only the new tokens (remove the original prompt)
-    new_tokens = generated_text[len(prompt):]
-    
+    new_tokens = generated_text[len(prompt) :]
+
     print(f"Generated text:")
     print(f"{prompt}{new_tokens}")
     print("-" * 50)
     print(f"Total tokens generated: {len(tokenizer.encode(new_tokens))}")
-    
+
     return generated_text
 
 
@@ -833,7 +898,12 @@ def main():
         "--load-pretrained",
         type=str,
         default=None,
-        choices=["gpt2-small (124M)", "gpt2-medium (355M)", "gpt2-large (774M)", "gpt2-xl (1558M)"],
+        choices=[
+            "gpt2-small (124M)",
+            "gpt2-medium (355M)",
+            "gpt2-large (774M)",
+            "gpt2-xl (1558M)",
+        ],
         help="Load pretrained GPT-2 weights (default: None)",
     )
     parser.add_argument(
@@ -859,13 +929,25 @@ def main():
         default=50,
         help="Maximum tokens to generate in inference mode (default: 50)",
     )
+    parser.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.1,
+        help="Ratio of total training steps for learning rate warmup (default: 0.1 = 10%)",
+    )
+    parser.add_argument(
+        "--initial-lr",
+        type=float,
+        default=1e-4,
+        help="Initial learning rate for warmup phase (default: 1e-4)",
+    )
 
     args = parser.parse_args()
 
     # Calculate gradient accumulation steps
     accumulation_steps = max(1, args.effective_batch_size // args.batch_size)
     effective_batch_size = args.batch_size * accumulation_steps
-    
+
     print("=== GPT Training Script ===")
     print(f"Epochs: {args.epochs}")
     print(f"Learning rate: {args.lr}")
@@ -877,16 +959,20 @@ def main():
     print(f"Start context: '{args.start_context}'")
     print(f"Log interval: {args.log_interval}")
     print(f"Temperature: {args.temperature}")
-    
+
     # Warning for high learning rates
     if args.lr > 1e-3:
-        print(f"⚠️  WARNING: Learning rate {args.lr} is quite high! Consider using 5e-4 or lower.")
-    
+        print(
+            f"⚠️  WARNING: Learning rate {args.lr} is quite high! Consider using 5e-4 or lower."
+        )
+
     # Temperature advice
     if args.temperature < 0.1:
         print(f"⚠️  Temperature {args.temperature} is very low - text may be repetitive")
     elif args.temperature > 1.5:
-        print(f"⚠️  Temperature {args.temperature} is very high - text may be incoherent")
+        print(
+            f"⚠️  Temperature {args.temperature} is very high - text may be incoherent"
+        )
 
     # Get device
     device = get_device()
@@ -935,7 +1021,7 @@ def main():
     # Initialize model
     print("\nInitializing model...")
     torch.manual_seed(123)
-    
+
     # Choose configuration based on pretrained model if specified
     if args.load_pretrained:
         config = BASE_CONFIG.copy()
@@ -947,9 +1033,9 @@ def main():
     else:
         config = GPT_CONFIG_124M
         print("Using default configuration")
-    
+
     model = GPTModel(config)
-    
+
     # Load pretrained weights if specified
     if args.load_pretrained:
         print(f"Loading pretrained weights: {args.load_pretrained}")
@@ -960,7 +1046,7 @@ def main():
         # model and weight there
         load_weights_into_gpt(model, pretrained_weights)
         print("Pretrained weights loaded successfully!")
-    
+
     model = model.to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -969,8 +1055,10 @@ def main():
     # If inference mode, run inference and exit
     if args.inference:
         if not args.load_pretrained:
-            print("⚠️  Warning: Running inference without pretrained weights. Results may be poor.")
-        
+            print(
+                "⚠️  Warning: Running inference without pretrained weights. Results may be poor."
+            )
+
         context_size = config.get("context_length", 256)
         run_inference(
             model=model,
@@ -978,10 +1066,10 @@ def main():
             prompt=args.prompt,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
-            context_size=context_size
+            context_size=context_size,
         )
         return  # Exit after inference
-    
+
     # Initialize optimizer (only needed for training)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1)
 
@@ -1001,36 +1089,71 @@ def main():
             start_epoch = 0
             best_val_loss = float("inf")
 
+    # Calculate warmup parameters
+    total_steps = len(train_loader) * args.epochs
+    # warm up step = some of total step
+    warmup_steps = int(args.warmup_ratio * total_steps)
+    # min learning rate and max learning rate
+    peak_lr = args.lr
+    initial_lr = args.initial_lr
+    # learning rate inc per warm up step = (peak - init) // warm up step
+    lr_increment = (peak_lr - initial_lr) / warmup_steps if warmup_steps > 0 else 0
+
+    print(f"Learning rate schedule:")
+    print(f"  Initial LR: {initial_lr}")
+    print(f"  Peak LR: {peak_lr}")
+    print(f"  Total steps: {total_steps}")
+    print(f"  Warmup steps: {warmup_steps} ({args.warmup_ratio*100:.1f}%)")
+    print(f"  LR increment per step: {lr_increment:.8f}")
+
     # Training loop
     print(f"\nStarting training from epoch {start_epoch}...")
     print("=" * 60)
-    
+
     global_step = 0
     tokenizer = tiktoken.get_encoding("gpt2")
 
     for epoch in range(start_epoch, args.epochs):
         # Train
-        train_loss, global_step = train_epoch(model, train_loader, val_loader, optimizer, device, epoch + 1, global_step, accumulation_steps, args.log_interval, args.start_context, args.temperature)
+        train_loss, global_step = train_epoch(
+            model,
+            train_loader,
+            val_loader,
+            optimizer,
+            device,
+            epoch + 1,
+            global_step,
+            accumulation_steps,
+            args.log_interval,
+            args.start_context,
+            args.temperature,
+            warmup_steps,
+            initial_lr,
+            peak_lr,
+            lr_increment,
+        )
 
         # Evaluate
         val_loss = evaluate(model, val_loader, device)
 
         # Print epoch summary in requested format
-        print(f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}")
+        print(
+            f"ep {epoch + 1} (step {global_step}): train loss {train_loss:.4f}, val loss {val_loss:.4f}"
+        )
 
         # Generate sample text to verify model performance
         model.eval()
         token_ids = text_to_token_ids(args.start_context, tokenizer).to(device)
-        
+
         with torch.no_grad():
             generated_ids = generate_text_simple(
                 model=model,
                 idx=token_ids,
                 max_new_tokens=15,
                 context_size=GPT_CONFIG_124M["context_length"],
-                temperature=args.temperature
+                temperature=args.temperature,
             )
-        
+
         generated_text = token_ids_to_text(generated_ids, tokenizer)
         print(f"End of epoch sample: {generated_text}")
         print("-" * 60)
