@@ -824,8 +824,9 @@ def train_epoch(
     last_grad_norm = 0.0  # Track gradient norm for logging
     
     # Enable optimized attention for better performance
-    torch.backends.cuda.enable_flash_sdp(True)
-    torch.backends.cuda.enable_math_sdp(False)  # Disable slower fallback
+    if torch.cuda.is_available():
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_math_sdp(False)  # Disable slower fallback
 
     # in single epoch, we have input batch and target batch
     for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
@@ -834,7 +835,7 @@ def train_epoch(
 
         # Use mixed precision if enabled
         if scaler is not None:
-            with torch.amp.autocast('cuda'):
+            with torch.cuda.amp.autocast():
                 logits = model(input_batch)
                 loss = torch.nn.functional.cross_entropy(
                     logits.flatten(0, 1), target_batch.flatten()
@@ -1311,7 +1312,7 @@ def main():
     print(f"Log interval: {args.log_interval}")
     print(f"Temperature: {args.temperature}")
     print("📊 Training on large-scale web text dataset with streaming")
-    print("⚡ Optimizations enabled: faster data loading, reduced validation, torch.compile, memory management")
+    print("⚡ Optimizations enabled: faster data loading, reduced validation, memory management")
 
     if not FLASH_ATTN_AVAILABLE:
         print("\n📦 To install Flash Attention 2:")
@@ -1384,14 +1385,15 @@ def main():
     model = GPTModel(model_config)
     model = model.to(device)
     
-    # Enable torch.compile for faster training (PyTorch 2.0+)
-    try:
-        if hasattr(torch, 'compile'):
-            print("✅ Using torch.compile for faster training")
-            # Use reduce-overhead mode to avoid CUDA graphs issues with gradient accumulation
-            model = torch.compile(model, mode='reduce-overhead')
-    except Exception as e:
-        print(f"Warning: torch.compile failed: {e}")
+    # Disable torch.compile for now due to CUDA graph conflicts with gradient accumulation
+    # TODO: Re-enable when PyTorch fixes CUDA graph tensor overwriting with mixed precision
+    # try:
+    #     if hasattr(torch, 'compile'):
+    #         print("✅ Using torch.compile for faster training")
+    #         model = torch.compile(model, mode='reduce-overhead')
+    # except Exception as e:
+    #     print(f"Warning: torch.compile failed: {e}")
+    print("⚡ torch.compile disabled to avoid CUDA graph conflicts")
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
@@ -1407,7 +1409,7 @@ def main():
 
     # Initialize mixed precision scaler if enabled
     scaler = (
-        torch.amp.GradScaler('cuda')
+        torch.cuda.amp.GradScaler()
         if args.mixed_precision and torch.cuda.is_available()
         else None
     )
