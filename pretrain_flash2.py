@@ -47,62 +47,30 @@ class GPTDatasetV1(Dataset):
 
 # open web text dataset
 class OpenWebTextDataset(IterableDataset):
-    """Dataset for large-scale web text data (FineWeb, C4, RedPajama) - supports both streaming and local files"""
+    """Streaming dataset for large-scale web text data (FineWeb, C4, RedPajama)"""
 
+    # init
+    # self, tokenizer, max_len, stride, buffer size 1000, skip_samples for starting position
     def __init__(
-        self, tokenizer, max_length, stride=None, buffer_size=1000, skip_samples=0, 
-        local_data_dir=None, use_streaming=True
+        self, tokenizer, max_length, stride=None, buffer_size=1000, skip_samples=0
     ):
+        # tokenizer
         self.tokenizer = tokenizer
+        # max len
         self.max_length = max_length
+        # how much forward
         self.stride = stride if stride is not None else max_length
+        # buff size for token
         self.buffer_size = buffer_size
+        # randome skip sample, so start from diff position
         self.skip_samples = skip_samples
-        self.local_data_dir = local_data_dir
-        self.use_streaming = use_streaming
-        
-        if local_data_dir and os.path.exists(local_data_dir):
-            print(f"Loading local FineWeb data from {local_data_dir}...")
-            self.use_streaming = False
-            self._load_local_data()
-        elif use_streaming:
-            print("Loading large-scale web text dataset...")
-            if skip_samples > 0:
-                print(
-                    f"Will skip first {skip_samples} samples to start from different position"
-                )
-            self._load_streaming_data()
-        else:
-            raise ValueError("Either provide local_data_dir or enable use_streaming")
-    
-    def _load_local_data(self):
-        """Load data from local downloaded files"""
-        self.local_files = []
-        
-        # Check for merged file first
-        merged_file = os.path.join(self.local_data_dir, "fineweb_complete.txt")
-        if os.path.exists(merged_file):
-            print(f"Found merged file: {merged_file}")
-            self.local_files = [merged_file]
-        else:
-            # Look for chunk files
-            chunk_files = sorted([
-                os.path.join(self.local_data_dir, f) 
-                for f in os.listdir(self.local_data_dir) 
-                if f.startswith("fineweb_chunk_") and f.endswith(".txt")
-            ])
-            
-            if chunk_files:
-                print(f"Found {len(chunk_files)} chunk files")
-                self.local_files = chunk_files
-            else:
-                raise RuntimeError(f"No FineWeb data files found in {self.local_data_dir}")
-        
-        total_size = sum(os.path.getsize(f) for f in self.local_files)
-        print(f"✅ Local FineWeb data loaded: {total_size / 1024**3:.2f} GB")
-    
-    def _load_streaming_data(self):
-        """Load streaming dataset (original behavior)"""
+
+        # load 1 of three
+        print("Loading large-scale web text dataset...")
+        if skip_samples > 0:
+            print(
+                f"Will skip first {skip_samples} samples to start from different position"
+            )
         dataset_loaded = False
 
         # Try different datasets in order of preference
@@ -145,71 +113,8 @@ class OpenWebTextDataset(IterableDataset):
 
         print("✅ Large-scale web text streaming dataset loaded successfully")
 
+    # iter the dataset
     def __iter__(self):
-        if self.use_streaming:
-            yield from self._iter_streaming()
-        else:
-            yield from self._iter_local()
-    
-    def _iter_local(self):
-        """Iterate over local downloaded files"""
-        token_buffer = []
-        skipped_count = 0
-        
-        for file_path in self.local_files:
-            print(f"Processing file: {os.path.basename(file_path)}")
-            
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line == '<|endoftext|>':
-                        continue
-                    
-                    # Skip samples to start from different position
-                    if skipped_count < self.skip_samples:
-                        skipped_count += 1
-                        continue
-                    
-                    try:
-                        # tokenize the text
-                        tokens = self.tokenizer.encode(
-                            line, allowed_special={"<|endoftext|>"}, disallowed_special=()
-                        )
-                        
-                        # add end of text between documents
-                        tokens.append(
-                            self.tokenizer.encode(
-                                "<|endoftext|>",
-                                allowed_special={"<|endoftext|>"},
-                                disallowed_special=(),
-                            )[0]
-                        )
-                        
-                        token_buffer.extend(tokens)
-                        
-                        # sliding window the buffer
-                        while len(token_buffer) >= self.max_length + 1:
-                            input_chunk = token_buffer[: self.max_length]
-                            target_chunk = token_buffer[1 : self.max_length + 1]
-                            
-                            yield torch.tensor(input_chunk), torch.tensor(target_chunk)
-                            
-                            # move buffer forward by stride
-                            token_buffer = token_buffer[self.stride :]
-                    
-                    except Exception as e:
-                        if not hasattr(self, "_error_count"):
-                            self._error_count = 0
-                        if self._error_count < 3:
-                            print(f"Warning: Error processing text sample: {e}")
-                            self._error_count += 1
-                        elif self._error_count == 3:
-                            print("... (suppressing further tokenization warnings)")
-                            self._error_count += 1
-                        continue
-    
-    def _iter_streaming(self):
-        """Iterate over streaming dataset (original behavior)"""
         # buffer to acc document
         token_buffer = []
         # track skipped samples
@@ -325,15 +230,11 @@ def create_openwebtext_dataloader(
     buffer_size=1000,
     # skip samples to start from different position
     skip_samples=0,
-    # local data directory for downloaded files
-    local_data_dir=None,
-    # whether to use streaming (True) or local files (False)
-    use_streaming=True,
 ):
     # tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
 
-    # create dataset (streaming or local)
+    # create stream dataset
     dataset = OpenWebTextDataset(
         # tokenizer
         tokenizer=tokenizer,
@@ -345,10 +246,6 @@ def create_openwebtext_dataloader(
         buffer_size=buffer_size,
         # skip samples to start from different position
         skip_samples=skip_samples,
-        # local data directory
-        local_data_dir=local_data_dir,
-        # use streaming or local files
-        use_streaming=use_streaming,
     )
 
     # Create dataloader for streaming dataset
@@ -681,7 +578,9 @@ def token_ids_to_text(token_ids, tokenizer):
 # val loss === cross entropy loss
 def calc_loss_batch(input_batch, target_batch, model, device):
     # by default most of things start in cpu, e.g. load file, torch.tensor, etc, so we need to move to GPU
-    input_batch, target_batch = input_batch.to(device, non_blocking=True), target_batch.to(device, non_blocking=True)
+    input_batch, target_batch = input_batch.to(
+        device, non_blocking=True
+    ), target_batch.to(device, non_blocking=True)
     # use model's forward func to get logit
     logits = model(input_batch)
     # 1. input_batch: [1_b, 3_token_n]
@@ -925,7 +824,7 @@ def train_epoch(
     optimizer.zero_grad(set_to_none=True)  # More memory efficient
     batch_idx = 0  # Initialize batch_idx
     last_grad_norm = 0.0  # Track gradient norm for logging
-    
+
     # Enable optimized attention for better performance
     if torch.cuda.is_available():
         torch.backends.cuda.enable_flash_sdp(True)
@@ -996,7 +895,7 @@ def train_epoch(
             optimizer.zero_grad(set_to_none=True)  # More memory efficient
             # global step  done
             global_step += 1
-            
+
             # Periodic memory cleanup for better performance
             if global_step % 100 == 0 and torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1017,15 +916,19 @@ def train_epoch(
                     # Use torch.inference_mode for better performance
                     with torch.inference_mode():
                         # loop val loader, so we get batch idx, input and target in val scope
-                        for val_batch_idx, (val_input, val_target) in enumerate(val_loader):
+                        for val_batch_idx, (val_input, val_target) in enumerate(
+                            val_loader
+                        ):
                             # only use first 3 batches for speed
-                            if val_batch_idx >= 3:  # Reduced from 5 to 3 for faster validation
+                            if (
+                                val_batch_idx >= 3
+                            ):  # Reduced from 5 to 3 for faster validation
                                 break
 
                             # ok, so basically, val
-                            val_input, val_target = val_input.to(device, non_blocking=True), val_target.to(
+                            val_input, val_target = val_input.to(
                                 device, non_blocking=True
-                            )
+                            ), val_target.to(device, non_blocking=True)
 
                             # logit, cross entropy
                             val_logits = model(val_input)
@@ -1098,7 +1001,9 @@ def evaluate(model, val_loader, device, max_val_batches=50):
                 if batch_idx >= max_val_batches:
                     break
 
-                input_batch, target_batch = input_batch.to(device, non_blocking=True), target_batch.to(device, non_blocking=True)
+                input_batch, target_batch = input_batch.to(
+                    device, non_blocking=True
+                ), target_batch.to(device, non_blocking=True)
                 logits = model(input_batch)
                 loss = torch.nn.functional.cross_entropy(
                     logits.flatten(0, 1), target_batch.flatten()
@@ -1376,12 +1281,6 @@ def main():
         action="store_true",
         help="Run in interactive mode for continuous text generation",
     )
-    parser.add_argument(
-        "--local-data-dir",
-        type=str,
-        default=None,
-        help="Path to local FineWeb data directory (if not provided, will use streaming)",
-    )
 
     args = parser.parse_args()
 
@@ -1421,7 +1320,9 @@ def main():
     print(f"Log interval: {args.log_interval}")
     print(f"Temperature: {args.temperature}")
     print("📊 Training on large-scale web text dataset with streaming")
-    print("⚡ Optimizations enabled: faster data loading, reduced validation, memory management")
+    print(
+        "⚡ Optimizations enabled: faster data loading, reduced validation, memory management"
+    )
 
     if not FLASH_ATTN_AVAILABLE:
         print("\n📦 To install Flash Attention 2:")
@@ -1461,35 +1362,19 @@ def main():
     random_skip = 0
     print(f"📚 Training will start from beginning: skipping {random_skip} samples")
 
-    # Create main training dataloader
-    local_data_dir = getattr(args, 'local_data_dir', None)
-    use_streaming = not bool(local_data_dir)
-    
-    if local_data_dir:
-        print(f"📁 Using local FineWeb data from: {local_data_dir}")
-    else:
-        print("🌐 Using streaming FineWeb data")
-    
+    # Create main training dataloader (streams entire dataset)
     train_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
         max_length=model_config["context_length"],
         stride=model_config["context_length"],
         num_workers=4,  # Increased workers for faster loading
         skip_samples=random_skip,
-        local_data_dir=local_data_dir,
-        use_streaming=use_streaming,
     )
 
-    # Create validation dataloader
-    if local_data_dir:
-        # For local data, use different skip amount for validation
-        val_random_skip = 50000  # Skip fewer samples for local data
-    else:
-        # For streaming, skip more samples to get end portion
-        val_random_skip = 1000000  # Skip 1M samples to get end portion
-    
+    # Create validation dataloader from end of dataset for held-out data
+    val_random_skip = 1000000  # Skip 1M samples to get end portion
     print(
-        f"📖 Validation will start from different portion: skipping {val_random_skip} samples"
+        f"📖 Validation will start from end portion: skipping {val_random_skip} samples"
     )
     val_loader = create_openwebtext_dataloader(
         batch_size=args.batch_size,
@@ -1497,8 +1382,6 @@ def main():
         stride=model_config["context_length"],
         num_workers=2,  # Use fewer workers for validation
         skip_samples=val_random_skip,
-        local_data_dir=local_data_dir,
-        use_streaming=use_streaming,
     )
 
     print("✅ Streaming dataloaders created")
@@ -1511,7 +1394,7 @@ def main():
     torch.manual_seed(123)
     model = GPTModel(model_config)
     model = model.to(device)
-    
+
     # Disable torch.compile for now due to CUDA graph conflicts with gradient accumulation
     # TODO: Re-enable when PyTorch fixes CUDA graph tensor overwriting with mixed precision
     # try:
