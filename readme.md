@@ -30,7 +30,7 @@ python pretrain_flash2.py \
     --effective-batch-size 256 \
     --peak-lr 8e-4 \
     --mixed-precision
-
+    --resume checkpoints/checkpoint_epoch_00013.pt
 
 
 
