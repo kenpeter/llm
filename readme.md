@@ -24,6 +24,16 @@ python pretrain_flash2.py --batch-size 4 --effective-batch-size 256 --peak-lr 8e
 
 
 
+python pretrain_flash2.py \
+    --data-path /home/kenpeter/work/data/bluemoon_roleplay \
+    --batch-size 4 \
+    --effective-batch-size 256 \
+    --peak-lr 8e-4 \
+    --mixed-precision
+
+
+
+
 ● Here are the CLI commands to run the optimized training:
 
   Basic training:

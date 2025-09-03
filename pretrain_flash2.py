@@ -45,6 +45,112 @@ class GPTDatasetV1(Dataset):
         return self.input_ids[idx], self.target_ids[idx]
 
 
+# Local dataset for custom data
+class LocalDataset(Dataset):
+    """Dataset for local data files (parquet, jsonl, txt)"""
+    
+    def __init__(self, data_path, tokenizer, max_length, stride=None):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.stride = stride if stride is not None else max_length
+        self.input_ids = []
+        self.target_ids = []
+        
+        print(f"Loading local dataset from {data_path}...")
+        
+        # Load data based on format
+        if os.path.isdir(data_path) and os.path.exists(os.path.join(data_path, 'dataset_dict.json')):
+            # HuggingFace dataset format
+            from datasets import load_from_disk
+            dataset = load_from_disk(data_path)
+            
+            if 'train' in dataset:
+                df = dataset['train'].to_pandas()
+            else:
+                # Use first available split
+                split_name = list(dataset.keys())[0]
+                df = dataset[split_name].to_pandas()
+                
+            # Try common text field names
+            text_column = None
+            for col in ['text', 'content', 'message', 'conversation', 'chat', 'prompt', 'response']:
+                if col in df.columns:
+                    text_column = col
+                    break
+            
+            if text_column is None:
+                print(f"Available columns: {list(df.columns)}")
+                text_column = df.columns[0]  # Use first column
+                print(f"Using column: {text_column}")
+                
+            texts = df[text_column].dropna().tolist()
+            
+        elif data_path.endswith('.parquet'):
+            import pandas as pd
+            df = pd.read_parquet(data_path)
+            # Try common text field names
+            text_column = None
+            for col in ['text', 'content', 'message', 'conversation', 'chat']:
+                if col in df.columns:
+                    text_column = col
+                    break
+            
+            if text_column is None:
+                print(f"Available columns: {list(df.columns)}")
+                text_column = df.columns[0]  # Use first column
+                print(f"Using column: {text_column}")
+                
+            texts = df[text_column].dropna().tolist()
+            
+        elif data_path.endswith('.jsonl'):
+            import json
+            texts = []
+            with open(data_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    data = json.loads(line)
+                    # Try common text field names
+                    text = None
+                    for field in ['text', 'content', 'message', 'conversation']:
+                        if field in data:
+                            text = data[field]
+                            break
+                    if text:
+                        texts.append(text)
+                        
+        elif data_path.endswith('.txt'):
+            with open(data_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+                texts = [text]  # Single large text
+        else:
+            raise ValueError(f"Unsupported file format: {data_path}")
+        
+        print(f"Loaded {len(texts)} texts")
+        
+        # Tokenize and create sliding windows
+        for text in texts:
+            if not text or len(text.strip()) == 0:
+                continue
+                
+            # Tokenize
+            token_ids = self.tokenizer.encode(
+                text, allowed_special={"<|endoftext|>"}, disallowed_special=()
+            )
+            
+            # Create sliding windows
+            for i in range(0, len(token_ids) - max_length, self.stride):
+                input_chunk = token_ids[i : i + max_length]
+                target_chunk = token_ids[i + 1 : i + max_length + 1]
+                self.input_ids.append(torch.tensor(input_chunk))
+                self.target_ids.append(torch.tensor(target_chunk))
+        
+        print(f"Created {len(self.input_ids)} training samples")
+    
+    def __len__(self):
+        return len(self.input_ids)
+    
+    def __getitem__(self, idx):
+        return self.input_ids[idx], self.target_ids[idx]
+
 # open web text dataset
 class OpenWebTextDataset(IterableDataset):
     """Streaming dataset for large-scale web text data (FineWeb, C4, RedPajama)"""
@@ -217,7 +323,9 @@ def create_dataloader_v1(
     return dataloader
 
 
-def create_openwebtext_dataloader(
+def create_dataloader(
+    # data path for local files, None for streaming
+    data_path=None,
     # batch size 4
     batch_size=4,
     # max len 256
@@ -226,37 +334,54 @@ def create_openwebtext_dataloader(
     stride=128,
     # use multiple workers for faster loading
     num_workers=4,
-    # this is token buffer
+    # this is token buffer (only for streaming)
     buffer_size=1000,
-    # skip samples to start from different position
+    # skip samples to start from different position (only for streaming)
     skip_samples=0,
 ):
     # tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
 
-    # create stream dataset
-    dataset = OpenWebTextDataset(
-        # tokenizer
-        tokenizer=tokenizer,
-        # max len 256; the whole sentense can process
-        max_length=max_length,
-        # stride means how much go forward, no repeat
-        stride=stride,
-        # buff size
-        buffer_size=buffer_size,
-        # skip samples to start from different position
-        skip_samples=skip_samples,
-    )
-
-    # Create dataloader for streaming dataset
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,  # Note: shuffle not applicable for streaming
-        pin_memory=True,  # Faster GPU transfer
-        persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
-        prefetch_factor=2 if num_workers > 0 else 2,  # Prefetch batches
-    )
+    if data_path is not None:
+        # Use local dataset
+        print(f"📁 Using local dataset: {data_path}")
+        dataset = LocalDataset(
+            data_path=data_path,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            stride=stride,
+        )
+        
+        # Create dataloader for local dataset
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,  # Can shuffle local data
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=True if num_workers > 0 else False,
+            prefetch_factor=2 if num_workers > 0 else 2,
+        )
+    else:
+        # Use streaming dataset
+        print("🌐 Using streaming dataset")
+        dataset = OpenWebTextDataset(
+            tokenizer=tokenizer,
+            max_length=max_length,
+            stride=stride,
+            buffer_size=buffer_size,
+            skip_samples=skip_samples,
+        )
+        
+        # Create dataloader for streaming dataset
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,  # Note: shuffle not applicable for streaming
+            pin_memory=True,  # Faster GPU transfer
+            persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
+            prefetch_factor=2 if num_workers > 0 else 2,  # Prefetch batches
+        )
 
     return dataloader
 
@@ -837,7 +962,7 @@ def train_epoch(
 
         # Use mixed precision if enabled
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logits = model(input_batch)
                 loss = torch.nn.functional.cross_entropy(
                     logits.flatten(0, 1), target_batch.flatten()
@@ -1180,6 +1305,12 @@ def main():
         help="Minimum learning rate for cosine decay (default: 1e-6)",
     )
     parser.add_argument(
+        "--data-path",
+        type=str,
+        default=None,
+        help="Path to local dataset file (.parquet, .jsonl, .txt). If not provided, uses streaming datasets",
+    )
+    parser.add_argument(
         "--warmup-steps",
         type=int,
         default=2000,
@@ -1362,8 +1493,9 @@ def main():
     random_skip = 0
     print(f"📚 Training will start from beginning: skipping {random_skip} samples")
 
-    # Create main training dataloader (streams entire dataset)
-    train_loader = create_openwebtext_dataloader(
+    # Create main training dataloader
+    train_loader = create_dataloader(
+        data_path=args.data_path,  # Use local data if provided
         batch_size=args.batch_size,
         max_length=model_config["context_length"],
         stride=model_config["context_length"],
@@ -1371,23 +1503,36 @@ def main():
         skip_samples=random_skip,
     )
 
-    # Create validation dataloader from end of dataset for held-out data
-    val_random_skip = 1000000  # Skip 1M samples to get end portion
-    print(
-        f"📖 Validation will start from end portion: skipping {val_random_skip} samples"
-    )
-    val_loader = create_openwebtext_dataloader(
-        batch_size=args.batch_size,
-        max_length=model_config["context_length"],
-        stride=model_config["context_length"],
-        num_workers=2,  # Use fewer workers for validation
-        skip_samples=val_random_skip,
-    )
+    # Create validation dataloader
+    if args.data_path is not None:
+        # For local data, use same file but different random seed
+        print("📖 Using same local dataset for validation (with different shuffle)")
+        val_loader = create_dataloader(
+            data_path=args.data_path,
+            batch_size=args.batch_size,
+            max_length=model_config["context_length"],
+            stride=model_config["context_length"],
+            num_workers=2,
+        )
+    else:
+        # For streaming data, skip to end portion
+        val_random_skip = 1000000  # Skip 1M samples to get end portion
+        print(f"📖 Validation will start from end portion: skipping {val_random_skip} samples")
+        val_loader = create_dataloader(
+            data_path=None,  # Streaming
+            batch_size=args.batch_size,
+            max_length=model_config["context_length"],
+            stride=model_config["context_length"],
+            num_workers=2,  # Use fewer workers for validation
+            skip_samples=val_random_skip,
+        )
 
-    print("✅ Streaming dataloaders created")
-    print(
-        "📊 Note: Batch count unknown for streaming dataset (will process large-scale web text data)"
-    )
+    if args.data_path is not None:
+        print("✅ Local dataloaders created")
+        print(f"📊 Training batches: {len(train_loader)}")
+    else:
+        print("✅ Streaming dataloaders created")
+        print("📊 Note: Batch count unknown for streaming dataset (will process large-scale web text data)")
 
     # Initialize model
     print("\nInitializing model...")
